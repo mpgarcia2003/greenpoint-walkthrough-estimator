@@ -163,6 +163,7 @@ export function getCostSummary(
   const monthlyCost = monthlyLoadedLaborCost + monthlyOverheadCost;
   const grossMonthlyProfit = monthlyCost * (pricing.profitPercent / 100);
   const recommendedMonthlyContract = monthlyCost + grossMonthlyProfit;
+  const grossAnnualProfit = grossMonthlyProfit * 12;
 
   return {
     monthlyDirectLaborCost: round(monthlyDirectLaborCost),
@@ -173,6 +174,7 @@ export function getCostSummary(
     recommendedMonthlyContract: round(recommendedMonthlyContract),
     recommendedAnnualContract: round(recommendedMonthlyContract * 12),
     grossMonthlyProfit: round(grossMonthlyProfit),
+    grossAnnualProfit: round(grossAnnualProfit),
   };
 }
 

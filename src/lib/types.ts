@@ -114,4 +114,5 @@ export interface CostSummary {
   recommendedMonthlyContract: number;
   recommendedAnnualContract: number;
   grossMonthlyProfit: number;
+  grossAnnualProfit: number;
 }

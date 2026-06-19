@@ -1094,7 +1094,7 @@ function DashboardSummary({
         <CardTitle>Dashboard Summary</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
           <MetricTile
             icon={ClipboardList}
             label="Total Rooms"
@@ -1121,9 +1121,21 @@ function DashboardSummary({
           />
           <MetricTile
             icon={DollarSign}
+            label="Monthly Profit"
+            value={formatCurrency(costSummary.grossMonthlyProfit)}
+            tone="sky"
+          />
+          <MetricTile
+            icon={DollarSign}
             label="Annual Revenue"
             value={formatCurrency(costSummary.recommendedAnnualContract)}
             tone="rose"
+          />
+          <MetricTile
+            icon={DollarSign}
+            label="Annual Profit"
+            value={formatCurrency(costSummary.grossAnnualProfit)}
+            tone="amber"
           />
         </div>
       </CardContent>
@@ -1189,6 +1201,16 @@ function CostEstimatorPanel({
           <SummaryLine
             label="Annual Cost"
             value={formatCurrency(costSummary.annualCost)}
+          />
+          <SummaryLine
+            label="Monthly Profit"
+            value={formatCurrency(costSummary.grossMonthlyProfit)}
+            emphasis
+          />
+          <SummaryLine
+            label="Annual Profit"
+            value={formatCurrency(costSummary.grossAnnualProfit)}
+            emphasis
           />
           <SummaryLine
             label="Recommended Contract Price"

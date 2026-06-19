@@ -115,6 +115,8 @@ export function exportPdfEstimate(estimate: EstimateDraft) {
       ["Loaded Labor Cost", formatCurrency(cost.monthlyLoadedLaborCost)],
       ["Monthly Cost", formatCurrency(cost.monthlyCost)],
       ["Annual Cost", formatCurrency(cost.annualCost)],
+      ["Monthly Profit", formatCurrency(cost.grossMonthlyProfit)],
+      ["Annual Profit", formatCurrency(cost.grossAnnualProfit)],
       [
         "Recommended Monthly Contract Price",
         formatCurrency(cost.recommendedMonthlyContract),
@@ -215,6 +217,8 @@ export function exportExcelEstimate(estimate: EstimateDraft) {
         ["Loaded Labor Cost", cost.monthlyLoadedLaborCost],
         ["Monthly Cost", cost.monthlyCost],
         ["Annual Cost", cost.annualCost],
+        ["Monthly Profit", cost.grossMonthlyProfit],
+        ["Annual Profit", cost.grossAnnualProfit],
         ["Recommended Monthly Contract Price", cost.recommendedMonthlyContract],
         ["Recommended Annual Contract Price", cost.recommendedAnnualContract],
       ],
@@ -348,6 +352,8 @@ export function exportCsvEstimate(estimate: EstimateDraft) {
     ["Loaded Labor Cost", cost.monthlyLoadedLaborCost],
     ["Monthly Cost", cost.monthlyCost],
     ["Annual Cost", cost.annualCost],
+    ["Monthly Profit", cost.grossMonthlyProfit],
+    ["Annual Profit", cost.grossAnnualProfit],
     ["Recommended Monthly Contract Price", cost.recommendedMonthlyContract],
     ["Recommended Annual Contract Price", cost.recommendedAnnualContract],
   ];
