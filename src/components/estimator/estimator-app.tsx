@@ -39,6 +39,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  deleteCloudWalkthrough,
+  downloadCloudWalkthroughPdf,
+  listCloudWalkthroughs,
+  saveCloudWalkthrough,
+} from "@/lib/cloud-walkthroughs";
+import {
   buildEstimateDraft,
   createRoomEntry,
   facilityLabel,
@@ -65,9 +71,11 @@ import {
   ROOM_TYPES,
 } from "@/lib/constants";
 import {
+  createPdfEstimateBlob,
   exportCsvEstimate,
   exportExcelEstimate,
   exportPdfEstimate,
+  getPdfEstimateFileName,
 } from "@/lib/exports";
 import {
   clearActiveEstimate,
@@ -89,6 +97,7 @@ import type {
 import { cn } from "@/lib/utils";
 
 type AppStep = "facility" | "walkthrough";
+type HistoryMode = "cloud" | "local";
 
 type EditingEntry = {
   id: string;
@@ -123,6 +132,7 @@ export function EstimatorApp() {
     useState<CleaningFrequency>("5 days/week");
   const [pricing, setPricing] = useState<PricingInputs>({ ...DEFAULT_PRICING });
   const [savedEstimates, setSavedEstimates] = useState<EstimateDraft[]>([]);
+  const [historyMode, setHistoryMode] = useState<HistoryMode>("local");
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"loading" | "saving" | "saved">(
     "loading",
@@ -217,7 +227,23 @@ export function EstimatorApp() {
         setStep(savedDraft.entries?.length ? "walkthrough" : "facility");
       }
 
-      setSavedEstimates(savedHistory);
+      try {
+        const cloudHistory = await listCloudWalkthroughs();
+        setSavedEstimates(cloudHistory);
+        setHistoryMode("cloud");
+        setHistoryStatus({
+          tone: "success",
+          message: "Cloud walkthrough history connected.",
+        });
+      } catch {
+        setSavedEstimates(savedHistory);
+        setHistoryMode("local");
+        setHistoryStatus({
+          tone: "error",
+          message:
+            "Using local history until Supabase schema and server key are configured.",
+        });
+      }
       setDraftLoaded(true);
       setSaveStatus("saved");
     }
@@ -330,16 +356,30 @@ export function EstimatorApp() {
   }
 
   async function refreshSavedHistory() {
+    if (historyMode === "cloud") {
+      setSavedEstimates(await listCloudWalkthroughs());
+      return;
+    }
+
     setSavedEstimates(await listSavedEstimates());
   }
 
   async function saveWalkthroughSnapshot() {
     try {
-      const savedEstimate = await saveEstimateSnapshot(estimateDraft);
+      const savedEstimate =
+        historyMode === "cloud"
+          ? await saveCloudWalkthrough({
+              estimate: estimateDraft,
+              pdfBlob: createPdfEstimateBlob(estimateDraft),
+              pdfFileName: getPdfEstimateFileName(estimateDraft),
+            })
+          : await saveEstimateSnapshot(estimateDraft);
       await refreshSavedHistory();
       setHistoryStatus({
         tone: "success",
-        message: `Saved walkthrough: ${facilityLabel(savedEstimate.facility)}`,
+        message: `Saved ${
+          historyMode === "cloud" ? "to cloud" : "locally"
+        }: ${facilityLabel(savedEstimate.facility)}`,
       });
     } catch (error) {
       console.error(error);
@@ -379,7 +419,12 @@ export function EstimatorApp() {
   }
 
   async function deleteWalkthroughSnapshot(id: string) {
-    await deleteSavedEstimateRecord(id);
+    if (historyMode === "cloud") {
+      await deleteCloudWalkthrough(id);
+    } else {
+      await deleteSavedEstimateRecord(id);
+    }
+
     await refreshSavedHistory();
     setHistoryStatus({
       tone: "success",
@@ -489,12 +534,23 @@ export function EstimatorApp() {
               onUpdatePricing={updatePricing}
             />
             <SavedWalkthroughsPanel
+              historyMode={historyMode}
               savedEstimates={savedEstimates}
               status={historyStatus}
               onDelete={deleteWalkthroughSnapshot}
-              onExportPdf={(estimate) =>
-                runExport(() => exportPdfEstimate(estimate), "Saved PDF export")
-              }
+              onExportPdf={(estimate) => {
+                if (historyMode === "cloud") {
+                  downloadCloudWalkthroughPdf(estimate.id).catch(() =>
+                    runExport(
+                      () => exportPdfEstimate(estimate),
+                      "Saved PDF export",
+                    ),
+                  );
+                  return;
+                }
+
+                runExport(() => exportPdfEstimate(estimate), "Saved PDF export");
+              }}
               onReopen={reopenSavedWalkthrough}
               onSaveCurrent={saveWalkthroughSnapshot}
             />
@@ -1569,6 +1625,7 @@ function PricingInput({
 }
 
 function SavedWalkthroughsPanel({
+  historyMode,
   savedEstimates,
   status,
   onDelete,
@@ -1576,6 +1633,7 @@ function SavedWalkthroughsPanel({
   onReopen,
   onSaveCurrent,
 }: {
+  historyMode: HistoryMode;
   savedEstimates: EstimateDraft[];
   status: {
     tone: "success" | "error";
@@ -1589,7 +1647,17 @@ function SavedWalkthroughsPanel({
   return (
     <Card className="bg-[#101816]">
       <CardHeader>
-        <CardTitle>Saved Walkthroughs</CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>Saved Walkthroughs</CardTitle>
+          <Badge
+            className={cn(
+              "border-[#31453d] bg-[#0b1311]",
+              historyMode === "cloud" ? "text-primary" : "text-[#fbbf24]",
+            )}
+          >
+            {historyMode === "cloud" ? "Cloud Storage" : "Local Fallback"}
+          </Badge>
+        </div>
       </CardHeader>
       <CardContent className="grid gap-3">
         <Button className="h-12" onClick={onSaveCurrent}>

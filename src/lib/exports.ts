@@ -48,7 +48,7 @@ function getExportModel(estimate: EstimateDraft) {
   return { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries };
 }
 
-export function exportPdfEstimate(estimate: EstimateDraft) {
+function createPdfEstimateDocument(estimate: EstimateDraft) {
   const { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries } =
     getExportModel(estimate);
   const doc = new jsPDF({ unit: "pt", format: "letter" }) as AutoTableDocument;
@@ -167,8 +167,20 @@ export function exportPdfEstimate(estimate: EstimateDraft) {
     headStyles: { fillColor: [25, 51, 42] },
   });
 
-  const fileName = `${fileBaseName(estimate) || "greenpoint-estimate"}.pdf`;
-  downloadBlob(doc.output("blob"), fileName);
+  return doc;
+}
+
+export function getPdfEstimateFileName(estimate: EstimateDraft) {
+  return `${fileBaseName(estimate) || "greenpoint-estimate"}.pdf`;
+}
+
+export function createPdfEstimateBlob(estimate: EstimateDraft) {
+  return createPdfEstimateDocument(estimate).output("blob");
+}
+
+export function exportPdfEstimate(estimate: EstimateDraft) {
+  const fileName = getPdfEstimateFileName(estimate);
+  downloadBlob(createPdfEstimateBlob(estimate), fileName);
 
   return fileName;
 }

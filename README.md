@@ -66,6 +66,38 @@ vercel env add GREENPOINT_PASSCODE production
 vercel --prod
 ```
 
+## Supabase Cloud Walkthroughs
+
+The app supports cloud saved walkthroughs through server-side API routes. The
+browser never writes directly to the Supabase tables.
+
+1. In Supabase SQL Editor, run:
+
+```bash
+supabase/schema.sql
+```
+
+2. Add these environment variables locally and in Vercel:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
+SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` must only be used server-side. Do not commit it and
+do not expose it in browser code.
+
+3. In Supabase Data API settings, make sure the `walkthroughs` table is exposed
+to the Data API if your project does not expose new tables automatically.
+
+When cloud is configured, the Saved Walkthroughs panel stores:
+
+- editable walkthrough data in `public.walkthroughs`
+- generated PDFs in the private `walkthrough-files` storage bucket
+
+If cloud is not configured, the app falls back to local browser history.
+
 ## Verification
 
 ```bash
