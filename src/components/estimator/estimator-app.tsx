@@ -105,6 +105,7 @@ type EstimatorAppProps = {
   organization: OrganizationSummary;
   organizations: OrganizationSummary[];
   userEmail: string;
+  userId: string;
   onChangeOrganization: (organizationId: string) => void;
   onSignOut: () => void;
 };
@@ -136,6 +137,7 @@ export function EstimatorApp({
   organization,
   organizations,
   userEmail,
+  userId,
   onChangeOrganization,
   onSignOut,
 }: EstimatorAppProps) {
@@ -163,6 +165,10 @@ export function EstimatorApp({
   } | null>(null);
   const [editingEntry, setEditingEntry] = useState<EditingEntry | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const localStorageScope = useMemo(
+    () => `${userId}:${organization.id}`,
+    [organization.id, userId],
+  );
 
   const totals = useMemo(() => getTotals(entries), [entries]);
   const floorNumbers = useMemo(
@@ -223,8 +229,8 @@ export function EstimatorApp({
 
     async function restoreDraft() {
       const [savedDraft, savedHistory] = await Promise.all([
-        loadActiveEstimate(),
-        listSavedEstimates(),
+        loadActiveEstimate(localStorageScope),
+        listSavedEstimates(localStorageScope),
       ]);
 
       if (!mounted) {
@@ -269,7 +275,7 @@ export function EstimatorApp({
     return () => {
       mounted = false;
     };
-  }, [organization.id, organization.name]);
+  }, [localStorageScope, organization.id, organization.name]);
 
   useEffect(() => {
     if (!draftLoaded) {
@@ -278,13 +284,13 @@ export function EstimatorApp({
 
     const handle = window.setTimeout(() => {
       setSaveStatus("saving");
-      saveActiveEstimate(estimateDraft)
+      saveActiveEstimate(estimateDraft, localStorageScope)
         .then(() => setSaveStatus("saved"))
         .catch(() => setSaveStatus("saved"));
     }, 180);
 
     return () => window.clearTimeout(handle);
-  }, [draftLoaded, estimateDraft]);
+  }, [draftLoaded, estimateDraft, localStorageScope]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "nearest" });
@@ -358,7 +364,7 @@ export function EstimatorApp({
     setPricing({ ...DEFAULT_PRICING });
     setEditingEntry(null);
     setStep("facility");
-    await clearActiveEstimate();
+    await clearActiveEstimate(localStorageScope);
     setSaveStatus("saved");
   }
 
@@ -377,7 +383,7 @@ export function EstimatorApp({
       return;
     }
 
-    setSavedEstimates(await listSavedEstimates());
+    setSavedEstimates(await listSavedEstimates(localStorageScope));
   }
 
   async function saveWalkthroughSnapshot() {
@@ -390,7 +396,7 @@ export function EstimatorApp({
               pdfBlob: createPdfEstimateBlob(estimateDraft),
               pdfFileName: getPdfEstimateFileName(estimateDraft),
             })
-          : await saveEstimateSnapshot(estimateDraft);
+          : await saveEstimateSnapshot(estimateDraft, localStorageScope);
       await refreshSavedHistory();
       setHistoryStatus({
         tone: "success",
@@ -423,12 +429,15 @@ export function EstimatorApp({
     setPricing({ ...DEFAULT_PRICING, ...normalizedEstimate.pricing });
     setEditingEntry(null);
     setStep("walkthrough");
-    await saveActiveEstimate({
-      ...normalizedEstimate,
-      id: estimateDraft.id,
-      savedAt: undefined,
-      updatedAt: new Date().toISOString(),
-    });
+    await saveActiveEstimate(
+      {
+        ...normalizedEstimate,
+        id: estimateDraft.id,
+        savedAt: undefined,
+        updatedAt: new Date().toISOString(),
+      },
+      localStorageScope,
+    );
     setHistoryStatus({
       tone: "success",
       message: `Reopened ${facilityLabel(normalizedEstimate.facility)}`,
@@ -439,7 +448,7 @@ export function EstimatorApp({
     if (historyMode === "cloud") {
       await deleteCloudWalkthrough(id);
     } else {
-      await deleteSavedEstimateRecord(id);
+      await deleteSavedEstimateRecord(id, localStorageScope);
     }
 
     await refreshSavedHistory();

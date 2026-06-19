@@ -198,6 +198,7 @@ export function AuthenticatedApp() {
       organization={selectedOrganization}
       organizations={organizations}
       userEmail={session.user.email ?? ""}
+      userId={session.user.id}
       onChangeOrganization={selectOrganization}
       onSignOut={signOut}
     />
