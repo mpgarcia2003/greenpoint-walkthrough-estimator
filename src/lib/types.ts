@@ -132,9 +132,16 @@ export interface CostSummary {
   grossAnnualProfit: number;
 }
 
+export interface ProposalContent {
+  letterOfIntroduction: string;
+  executiveOverview: string;
+  aboutServiceProvider: string;
+}
+
 export interface OrganizationSummary {
   id: string;
   name: string;
+  proposalContent?: ProposalContent;
   createdAt?: string;
 }
 

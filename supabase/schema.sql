@@ -57,6 +57,15 @@ alter table public.walkthroughs
 alter table public.walkthroughs
   add column if not exists proposal_generated_at timestamptz;
 
+alter table public.organizations
+  add column if not exists proposal_letter_of_introduction text not null default '';
+
+alter table public.organizations
+  add column if not exists proposal_executive_overview text not null default '';
+
+alter table public.organizations
+  add column if not exists proposal_about_service_provider text not null default '';
+
 create index if not exists walkthroughs_created_at_idx
   on public.walkthroughs (created_at desc);
 

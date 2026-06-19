@@ -4,6 +4,7 @@ import type {
   FacilityInfo,
   FacilityType,
   PricingInputs,
+  ProposalContent,
   RoomType,
 } from "@/lib/types";
 
@@ -88,6 +89,15 @@ export const DEFAULT_PRICING: PricingInputs = {
   payrollBurdenPercent: 25,
   overheadPercent: 15,
   profitPercent: 20,
+};
+
+export const DEFAULT_PROPOSAL_CONTENT: ProposalContent = {
+  letterOfIntroduction:
+    "Thank you for the opportunity to present this sanitation services proposal. This document converts the walkthrough observations, room-by-room cleaning times, labor requirements, and pricing model into a formal service program for review.\n\nThe program is structured to provide predictable service, clear scope accountability, and a fixed monthly price based on the current facility profile. Any special conditions or periodic service items entered during the walkthrough are highlighted in the notes section.",
+  executiveOverview:
+    "This proposal is built around a structured walkthrough of the facility, including documented rooms, cleaning frequencies, staffing requirements, and pricing assumptions. The result is a clear janitorial service plan that can be reviewed, revised, and converted into an approved contract.",
+  aboutServiceProvider:
+    "The service provider delivers professional janitorial and sanitation support for commercial, institutional, government, healthcare, industrial, education, retail, and multi-building environments. The operating model emphasizes documented scopes, trained personnel, consistent supervision, quality checks, and clear communication with the client throughout the contract term.",
 };
 
 export const ACTIVE_ESTIMATE_ID = "greenpoint-active-estimate";

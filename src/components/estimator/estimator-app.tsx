@@ -78,6 +78,7 @@ import {
   DEFAULT_BUILDINGS,
   DEFAULT_FACILITY,
   DEFAULT_PRICING,
+  DEFAULT_PROPOSAL_CONTENT,
   FACILITY_TYPES,
   FREQUENCY_OPTIONS,
   MINUTE_OPTIONS,
@@ -111,9 +112,11 @@ import type {
   FacilityType,
   OrganizationSummary,
   PricingInputs,
+  ProposalContent,
   RoomEntry,
   RoomType,
 } from "@/lib/types";
+import { createBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { cn } from "@/lib/utils";
 
 type AppStep = "dashboard" | "facility" | "walkthrough";
@@ -144,6 +147,20 @@ const roomAccentClasses = [
   "bg-[#fb7185]",
   "bg-[#a3e635]",
 ];
+
+function normalizeProposalContent(content?: ProposalContent): ProposalContent {
+  return {
+    aboutServiceProvider:
+      content?.aboutServiceProvider?.trim() ||
+      DEFAULT_PROPOSAL_CONTENT.aboutServiceProvider,
+    executiveOverview:
+      content?.executiveOverview?.trim() ||
+      DEFAULT_PROPOSAL_CONTENT.executiveOverview,
+    letterOfIntroduction:
+      content?.letterOfIntroduction?.trim() ||
+      DEFAULT_PROPOSAL_CONTENT.letterOfIntroduction,
+  };
+}
 
 function normalizeEntries(entries: RoomEntry[]) {
   return entries.map((entry) => ({
@@ -195,6 +212,13 @@ export function EstimatorApp({
   const [cleaningFrequency, setCleaningFrequency] =
     useState<CleaningFrequency>("5 days/week");
   const [pricing, setPricing] = useState<PricingInputs>({ ...DEFAULT_PRICING });
+  const [proposalContent, setProposalContent] = useState<ProposalContent>(() =>
+    normalizeProposalContent(organization.proposalContent),
+  );
+  const [proposalContentStatus, setProposalContentStatus] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [savedEstimates, setSavedEstimates] = useState<EstimateDraft[]>([]);
   const [historyMode, setHistoryMode] = useState<HistoryMode>("local");
   const [draftLoaded, setDraftLoaded] = useState(false);
@@ -417,6 +441,50 @@ export function EstimatorApp({
       ...current,
       [field]: Number.isFinite(value) ? value : 0,
     }));
+  }
+
+  function updateProposalContent<K extends keyof ProposalContent>(
+    field: K,
+    value: ProposalContent[K],
+  ) {
+    setProposalContent((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function saveProposalContent() {
+    try {
+      setProposalContentStatus(null);
+
+      const supabase = createBrowserSupabaseClient();
+      const { error } = await supabase
+        .from("organizations")
+        .update({
+          proposal_about_service_provider:
+            proposalContent.aboutServiceProvider.trim(),
+          proposal_executive_overview: proposalContent.executiveOverview.trim(),
+          proposal_letter_of_introduction:
+            proposalContent.letterOfIntroduction.trim(),
+        })
+        .eq("id", organization.id);
+
+      if (error) {
+        throw error;
+      }
+
+      setProposalContentStatus({
+        tone: "success",
+        message: "Proposal content saved for this organization.",
+      });
+    } catch (error) {
+      console.error(error);
+      setProposalContentStatus({
+        tone: "error",
+        message:
+          "Could not save proposal content. Make sure your Supabase schema is updated and your account can edit this organization.",
+      });
+    }
   }
 
   function addEntry(minutes: number, quantity = 1) {
@@ -677,7 +745,7 @@ export function EstimatorApp({
 
           await saveCloudWalkthroughProposal({
             id: estimate.id,
-            proposalBlob: createProposalPdfBlob(estimate),
+            proposalBlob: createProposalPdfBlob(estimate, proposalContent),
             proposalFileName: fileName,
           });
           setHistoryStatus({
@@ -691,7 +759,10 @@ export function EstimatorApp({
         return;
       }
 
-      runExport(() => exportProposalPdf(estimate), "Proposal PDF");
+      runExport(
+        () => exportProposalPdf(estimate, proposalContent),
+        "Proposal PDF",
+      );
     } catch (error) {
       console.error(error);
       setHistoryStatus({
@@ -727,9 +798,12 @@ export function EstimatorApp({
         organizations={organizations}
         savedEstimates={savedEstimates}
         status={historyStatus}
+        proposalContent={proposalContent}
+        proposalContentStatus={proposalContentStatus}
         userEmail={userEmail}
         onChangeOrganization={onChangeOrganization}
         onDelete={deleteWalkthroughSnapshot}
+        onChangeProposalContent={updateProposalContent}
         onGenerateProposal={openSavedProposal}
         onExportPdf={(estimate) => {
           if (historyMode === "cloud") {
@@ -743,6 +817,7 @@ export function EstimatorApp({
         }}
         onNewEstimate={startNewEstimate}
         onOpen={reopenSavedWalkthrough}
+        onSaveProposalContent={saveProposalContent}
         onRefresh={refreshDashboard}
         onSignOut={onSignOut}
       />
@@ -868,7 +943,7 @@ export function EstimatorApp({
               status={exportStatus}
               onProposal={() =>
                 runExport(
-                  () => exportProposalPdf(estimateDraft),
+                  () => exportProposalPdf(estimateDraft, proposalContent),
                   "Proposal PDF",
                 )
               }
@@ -911,13 +986,17 @@ function SavedWalkthroughDashboard({
   organizations,
   savedEstimates,
   status,
+  proposalContent,
+  proposalContentStatus,
   userEmail,
   onChangeOrganization,
+  onChangeProposalContent,
   onDelete,
   onExportPdf,
   onGenerateProposal,
   onNewEstimate,
   onOpen,
+  onSaveProposalContent,
   onRefresh,
   onSignOut,
 }: {
@@ -929,13 +1008,23 @@ function SavedWalkthroughDashboard({
     tone: "success" | "error";
     message: string;
   } | null;
+  proposalContent: ProposalContent;
+  proposalContentStatus: {
+    tone: "success" | "error";
+    message: string;
+  } | null;
   userEmail: string;
   onChangeOrganization: (organizationId: string) => void;
+  onChangeProposalContent: <K extends keyof ProposalContent>(
+    field: K,
+    value: ProposalContent[K],
+  ) => void;
   onDelete: (id: string) => void;
   onExportPdf: (estimate: EstimateDraft) => void;
   onGenerateProposal: (estimate: EstimateDraft) => void;
   onNewEstimate: () => void;
   onOpen: (estimate: EstimateDraft) => void;
+  onSaveProposalContent: () => void;
   onRefresh: () => void;
   onSignOut: () => void;
 }) {
@@ -1059,6 +1148,13 @@ function SavedWalkthroughDashboard({
             tone="amber"
           />
         </section>
+
+        <ProposalContentPanel
+          content={proposalContent}
+          status={proposalContentStatus}
+          onChangeContent={onChangeProposalContent}
+          onSave={onSaveProposalContent}
+        />
 
         <Card className="bg-[#101816]">
           <CardContent className="grid gap-3 pt-4">
@@ -1236,6 +1332,102 @@ function SavedWalkthroughDashboard({
         )}
       </div>
     </main>
+  );
+}
+
+function ProposalContentPanel({
+  content,
+  status,
+  onChangeContent,
+  onSave,
+}: {
+  content: ProposalContent;
+  status: {
+    tone: "success" | "error";
+    message: string;
+  } | null;
+  onChangeContent: <K extends keyof ProposalContent>(
+    field: K,
+    value: ProposalContent[K],
+  ) => void;
+  onSave: () => void;
+}) {
+  return (
+    <Card className="bg-[#101816]">
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle>Proposal Content</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Saved company language used in every generated proposal.
+            </p>
+          </div>
+          <Button className="h-12" onClick={onSave}>
+            <Save className="size-4" />
+            Save Content
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-4 lg:grid-cols-3">
+          <ProposalTextarea
+            id="proposal-letter"
+            label="Letter of Introduction"
+            value={content.letterOfIntroduction}
+            onChange={(value) => onChangeContent("letterOfIntroduction", value)}
+          />
+          <ProposalTextarea
+            id="proposal-overview"
+            label="Executive Overview"
+            value={content.executiveOverview}
+            onChange={(value) => onChangeContent("executiveOverview", value)}
+          />
+          <ProposalTextarea
+            id="proposal-about"
+            label="About the Service Provider"
+            value={content.aboutServiceProvider}
+            onChange={(value) => onChangeContent("aboutServiceProvider", value)}
+          />
+        </div>
+
+        {status ? (
+          <div
+            className={cn(
+              "rounded-md border px-3 py-2 text-sm font-medium",
+              status.tone === "success"
+                ? "border-primary/50 bg-primary/10 text-[#c7f8d9]"
+                : "border-destructive/60 bg-destructive/10 text-[#ffd0d0]",
+            )}
+          >
+            {status.message}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProposalTextarea({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="grid gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Textarea
+        id={id}
+        className="min-h-44"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
   );
 }
 

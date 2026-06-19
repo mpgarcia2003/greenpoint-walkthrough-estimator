@@ -68,6 +68,8 @@ When cloud storage is configured, the Saved Walkthroughs panel stores:
 - generated PDFs in the private `walkthrough-files` storage bucket
 - generated proposal PDFs in the same private storage bucket, linked by
   `proposal_pdf_path` and `proposal_generated_at`
+- organization-level proposal content in `public.organizations`, including the
+  letter of introduction, executive overview, and service provider overview
 
 Walkthroughs created before the organization schema may have a blank
 `organization_id`; RLS will hide those old rows until they are assigned to an

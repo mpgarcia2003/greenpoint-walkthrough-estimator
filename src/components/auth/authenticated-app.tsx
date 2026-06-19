@@ -51,7 +51,9 @@ export function AuthenticatedApp() {
 
     const { data, error } = await supabase
       .from("organizations")
-      .select("id,name,created_at")
+      .select(
+        "id,name,created_at,proposal_letter_of_introduction,proposal_executive_overview,proposal_about_service_provider",
+      )
       .order("created_at", { ascending: true });
 
     if (error) {
@@ -64,6 +66,15 @@ export function AuthenticatedApp() {
     const nextOrganizations = (data ?? []).map((organization) => ({
       id: String(organization.id),
       name: String(organization.name),
+      proposalContent: {
+        aboutServiceProvider: String(
+          organization.proposal_about_service_provider ?? "",
+        ),
+        executiveOverview: String(organization.proposal_executive_overview ?? ""),
+        letterOfIntroduction: String(
+          organization.proposal_letter_of_introduction ?? "",
+        ),
+      },
       createdAt:
         typeof organization.created_at === "string"
           ? organization.created_at
