@@ -13,6 +13,7 @@ import {
   FileSpreadsheet,
   FileText,
   Layers3,
+  LogOut,
   Mic,
   Pencil,
   Plus,
@@ -90,6 +91,7 @@ import type {
   EstimateDraft,
   FacilityInfo,
   FacilityType,
+  OrganizationSummary,
   PricingInputs,
   RoomEntry,
   RoomType,
@@ -98,6 +100,14 @@ import { cn } from "@/lib/utils";
 
 type AppStep = "facility" | "walkthrough";
 type HistoryMode = "cloud" | "local";
+
+type EstimatorAppProps = {
+  organization: OrganizationSummary;
+  organizations: OrganizationSummary[];
+  userEmail: string;
+  onChangeOrganization: (organizationId: string) => void;
+  onSignOut: () => void;
+};
 
 type EditingEntry = {
   id: string;
@@ -122,7 +132,13 @@ function normalizeEntries(entries: RoomEntry[]) {
   }));
 }
 
-export function EstimatorApp() {
+export function EstimatorApp({
+  organization,
+  organizations,
+  userEmail,
+  onChangeOrganization,
+  onSignOut,
+}: EstimatorAppProps) {
   const [step, setStep] = useState<AppStep>("facility");
   const [facility, setFacility] = useState<FacilityInfo>({ ...DEFAULT_FACILITY });
   const [entries, setEntries] = useState<RoomEntry[]>([]);
@@ -228,12 +244,12 @@ export function EstimatorApp() {
       }
 
       try {
-        const cloudHistory = await listCloudWalkthroughs();
+        const cloudHistory = await listCloudWalkthroughs(organization.id);
         setSavedEstimates(cloudHistory);
         setHistoryMode("cloud");
         setHistoryStatus({
           tone: "success",
-          message: "Cloud walkthrough history connected.",
+          message: `Cloud history connected for ${organization.name}.`,
         });
       } catch {
         setSavedEstimates(savedHistory);
@@ -241,7 +257,7 @@ export function EstimatorApp() {
         setHistoryStatus({
           tone: "error",
           message:
-            "Using local history until Supabase schema and server key are configured.",
+            "Using local history until Supabase Auth, RLS, and storage are ready.",
         });
       }
       setDraftLoaded(true);
@@ -253,7 +269,7 @@ export function EstimatorApp() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [organization.id, organization.name]);
 
   useEffect(() => {
     if (!draftLoaded) {
@@ -357,7 +373,7 @@ export function EstimatorApp() {
 
   async function refreshSavedHistory() {
     if (historyMode === "cloud") {
-      setSavedEstimates(await listCloudWalkthroughs());
+      setSavedEstimates(await listCloudWalkthroughs(organization.id));
       return;
     }
 
@@ -369,6 +385,7 @@ export function EstimatorApp() {
       const savedEstimate =
         historyMode === "cloud"
           ? await saveCloudWalkthrough({
+              organizationId: organization.id,
               estimate: estimateDraft,
               pdfBlob: createPdfEstimateBlob(estimateDraft),
               pdfFileName: getPdfEstimateFileName(estimateDraft),
@@ -452,7 +469,12 @@ export function EstimatorApp() {
     return (
       <FacilityScreen
         facility={facility}
+        organization={organization}
+        organizations={organizations}
         saveStatus={saveStatus}
+        userEmail={userEmail}
+        onChangeOrganization={onChangeOrganization}
+        onSignOut={onSignOut}
         onStart={() => setStep("walkthrough")}
         onUpdateFacility={updateFacility}
       />
@@ -465,9 +487,12 @@ export function EstimatorApp() {
         totals={totals}
         breakdown={breakdown}
         facilityName={facilityLabel(facility)}
+        organization={organization}
         saveStatus={saveStatus}
+        userEmail={userEmail}
         onBack={() => setStep("facility")}
         onNewEstimate={startNewEstimate}
+        onSignOut={onSignOut}
       />
 
       <main className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-3 py-4 sm:px-5 lg:px-6">
@@ -578,12 +603,22 @@ export function EstimatorApp() {
 
 function FacilityScreen({
   facility,
+  organization,
+  organizations,
   saveStatus,
+  userEmail,
+  onChangeOrganization,
+  onSignOut,
   onStart,
   onUpdateFacility,
 }: {
   facility: FacilityInfo;
+  organization: OrganizationSummary;
+  organizations: OrganizationSummary[];
   saveStatus: "loading" | "saving" | "saved";
+  userEmail: string;
+  onChangeOrganization: (organizationId: string) => void;
+  onSignOut: () => void;
   onStart: () => void;
   onUpdateFacility: <K extends keyof FacilityInfo>(
     field: K,
@@ -593,7 +628,14 @@ function FacilityScreen({
   return (
     <main className="min-h-dvh bg-[#07110f] px-4 py-5 text-foreground sm:px-6 lg:px-8">
       <div className="mx-auto flex min-h-[calc(100dvh-2.5rem)] w-full max-w-5xl flex-col gap-5">
-        <AppHeader saveStatus={saveStatus} />
+        <AppHeader
+          organization={organization}
+          organizations={organizations}
+          saveStatus={saveStatus}
+          userEmail={userEmail}
+          onChangeOrganization={onChangeOrganization}
+          onSignOut={onSignOut}
+        />
 
         <section className="grid flex-1 items-center gap-5 lg:grid-cols-[0.9fr_1.1fr]">
           <div className="flex flex-col gap-5 rounded-lg border border-border bg-[#0d1714] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.28)] sm:p-6">
@@ -732,9 +774,19 @@ function FacilityScreen({
 }
 
 function AppHeader({
+  organization,
+  organizations,
   saveStatus,
+  userEmail,
+  onChangeOrganization,
+  onSignOut,
 }: {
+  organization: OrganizationSummary;
+  organizations: OrganizationSummary[];
   saveStatus: "loading" | "saving" | "saved";
+  userEmail: string;
+  onChangeOrganization: (organizationId: string) => void;
+  onSignOut: () => void;
 }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-3">
@@ -747,15 +799,63 @@ function AppHeader({
           <p className="text-xs text-muted-foreground">Walkthrough Estimator</p>
         </div>
       </div>
-      <Badge className="gap-2 border-[#31453d] bg-[#101816] text-[#cfe5d8]">
-        <Save className="size-4 text-primary" />
-        {saveStatus === "loading"
-          ? "Loading local database"
-          : saveStatus === "saving"
-            ? "Saving"
-            : "Saved locally"}
-      </Badge>
+      <div className="flex flex-wrap items-center gap-2">
+        <OrganizationControl
+          organization={organization}
+          organizations={organizations}
+          onChangeOrganization={onChangeOrganization}
+        />
+        <Badge className="gap-2 border-[#31453d] bg-[#101816] text-[#cfe5d8]">
+          <Save className="size-4 text-primary" />
+          {saveStatus === "loading"
+            ? "Loading local database"
+            : saveStatus === "saving"
+              ? "Saving"
+              : "Saved locally"}
+        </Badge>
+        <Button variant="secondary" onClick={onSignOut}>
+          <LogOut className="size-4" />
+          <span className="hidden sm:inline">{userEmail || "Sign Out"}</span>
+          <span className="sm:hidden">Exit</span>
+        </Button>
+      </div>
     </header>
+  );
+}
+
+function OrganizationControl({
+  organization,
+  organizations,
+  onChangeOrganization,
+}: {
+  organization: OrganizationSummary;
+  organizations: OrganizationSummary[];
+  onChangeOrganization: (organizationId: string) => void;
+}) {
+  if (organizations.length <= 1) {
+    return (
+      <Badge className="gap-2 border-[#31453d] bg-[#101816] text-[#cfe5d8]">
+        <Building2 className="size-4 text-primary" />
+        {organization.name}
+      </Badge>
+    );
+  }
+
+  return (
+    <div className="min-w-44">
+      <Select value={organization.id} onValueChange={onChangeOrganization}>
+        <SelectTrigger className="h-11 bg-[#101816] text-sm">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {organizations.map((item) => (
+            <SelectItem key={item.id} value={item.id}>
+              {item.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   );
 }
 
@@ -778,16 +878,22 @@ function RunningTotalsBar({
   totals,
   breakdown,
   facilityName,
+  organization,
   saveStatus,
+  userEmail,
   onBack,
   onNewEstimate,
+  onSignOut,
 }: {
   totals: ReturnType<typeof getTotals>;
   breakdown: ReturnType<typeof getRoomBreakdown>;
   facilityName: string;
+  organization: OrganizationSummary;
   saveStatus: "loading" | "saving" | "saved";
+  userEmail: string;
   onBack: () => void;
   onNewEstimate: () => void;
+  onSignOut: () => void;
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-[#07110f]/95 px-3 py-3 shadow-[0_16px_40px_rgba(0,0,0,0.22)] backdrop-blur sm:px-5 lg:px-6">
@@ -808,14 +914,23 @@ function RunningTotalsBar({
                 {facilityName}
               </p>
               <p className="text-xs text-muted-foreground">
+                {organization.name} -{" "}
                 {saveStatus === "saving" ? "Saving" : "Saved to local database"}
               </p>
             </div>
           </div>
-          <Button variant="outline" onClick={onNewEstimate}>
-            <X className="size-4" />
-            New Estimate
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="hidden border-[#31453d] bg-[#101816] text-[#cfe5d8] sm:inline-flex">
+              {userEmail}
+            </Badge>
+            <Button variant="outline" onClick={onNewEstimate}>
+              <X className="size-4" />
+              New Estimate
+            </Button>
+            <Button variant="secondary" size="icon" onClick={onSignOut} aria-label="Sign out">
+              <LogOut className="size-5" />
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-3 gap-2">

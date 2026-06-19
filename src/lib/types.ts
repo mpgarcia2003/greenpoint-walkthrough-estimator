@@ -120,6 +120,12 @@ export interface CostSummary {
   grossAnnualProfit: number;
 }
 
+export interface OrganizationSummary {
+  id: string;
+  name: string;
+  createdAt?: string;
+}
+
 export interface FloorSummary {
   floorNumber: number;
   totals: EstimateTotals;

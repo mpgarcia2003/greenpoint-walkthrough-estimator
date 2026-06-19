@@ -8,6 +8,8 @@ import type { EstimateDraft } from "@/lib/types";
 
 export interface CloudWalkthroughRow {
   id: string;
+  organization_id: string;
+  created_by: string | null;
   title: string;
   client_name: string | null;
   facility_name: string | null;
@@ -28,10 +30,14 @@ export interface CloudWalkthroughRow {
 export function estimateToCloudRow({
   estimate,
   id,
+  organizationId,
+  createdBy,
   pdfPath,
 }: {
   estimate: EstimateDraft;
   id: string;
+  organizationId: string;
+  createdBy: string;
   pdfPath?: string | null;
 }) {
   const cleaningFrequency = normalizeCleaningFrequency(estimate.cleaningFrequency);
@@ -45,6 +51,8 @@ export function estimateToCloudRow({
 
   return {
     id,
+    organization_id: organizationId,
+    created_by: createdBy,
     title,
     client_name: estimate.facility.clientName || null,
     facility_name: estimate.facility.facilityName || null,

@@ -1,35 +1,44 @@
 import { NextResponse } from "next/server";
 
-import { cloudUnavailableResponse, isWalkthroughApiAuthorized } from "@/app/api/walkthroughs/auth";
-import { createSupabaseAdminClient, hasSupabaseAdminConfig, WALKTHROUGH_FILES_BUCKET } from "@/lib/supabase-admin";
+import {
+  createWalkthroughSupabaseClient,
+  WALKTHROUGH_FILES_BUCKET,
+} from "@/app/api/walkthroughs/auth";
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  if (!(await isWalkthroughApiAuthorized())) {
-    return NextResponse.json({ ok: false }, { status: 401 });
-  }
+  const auth = await createWalkthroughSupabaseClient(request);
 
-  if (!hasSupabaseAdminConfig()) {
-    return cloudUnavailableResponse();
+  if (auth.response) {
+    return auth.response;
   }
 
   const { id } = await params;
-  const supabase = createSupabaseAdminClient();
-  const { data } = await supabase
+  const { data, error: rowError } = await auth.supabase
     .from("walkthroughs")
     .select("pdf_path")
     .eq("id", id)
     .single();
 
+  if (rowError) {
+    return NextResponse.json(
+      { ok: false, message: "Saved walkthrough not found." },
+      { status: 404 },
+    );
+  }
+
   if (data?.pdf_path) {
-    await supabase.storage
+    await auth.supabase.storage
       .from(WALKTHROUGH_FILES_BUCKET)
       .remove([data.pdf_path]);
   }
 
-  const { error } = await supabase.from("walkthroughs").delete().eq("id", id);
+  const { error } = await auth.supabase
+    .from("walkthroughs")
+    .delete()
+    .eq("id", id);
 
   if (error) {
     return NextResponse.json(

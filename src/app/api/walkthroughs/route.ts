@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
-import { cloudUnavailableResponse, isWalkthroughApiAuthorized } from "@/app/api/walkthroughs/auth";
-import { createSupabaseAdminClient, hasSupabaseAdminConfig, WALKTHROUGH_FILES_BUCKET } from "@/lib/supabase-admin";
+import {
+  createWalkthroughSupabaseClient,
+  WALKTHROUGH_FILES_BUCKET,
+} from "@/app/api/walkthroughs/auth";
 import type { EstimateDraft } from "@/lib/types";
 import {
   cloudRowToEstimate,
@@ -20,19 +22,28 @@ function safeFileName(fileName: string) {
   );
 }
 
-export async function GET() {
-  if (!(await isWalkthroughApiAuthorized())) {
-    return NextResponse.json({ ok: false }, { status: 401 });
+export async function GET(request: Request) {
+  const auth = await createWalkthroughSupabaseClient(request);
+
+  if (auth.response) {
+    return auth.response;
   }
 
-  if (!hasSupabaseAdminConfig()) {
-    return cloudUnavailableResponse();
+  const { searchParams } = new URL(request.url);
+  const organizationId = searchParams.get("organizationId");
+
+  if (!organizationId) {
+    return NextResponse.json(
+      { ok: false, message: "Missing organizationId." },
+      { status: 400 },
+    );
   }
 
-  const supabase = createSupabaseAdminClient();
+  const { supabase } = auth;
   const { data, error } = await supabase
     .from("walkthroughs")
     .select("*")
+    .eq("organization_id", organizationId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -49,20 +60,26 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  if (!(await isWalkthroughApiAuthorized())) {
-    return NextResponse.json({ ok: false }, { status: 401 });
-  }
+  const auth = await createWalkthroughSupabaseClient(request);
 
-  if (!hasSupabaseAdminConfig()) {
-    return cloudUnavailableResponse();
+  if (auth.response) {
+    return auth.response;
   }
 
   const formData = await request.formData();
   const estimateValue = formData.get("estimate");
+  const organizationIdValue = formData.get("organizationId");
 
   if (typeof estimateValue !== "string") {
     return NextResponse.json(
       { ok: false, message: "Missing estimate payload." },
+      { status: 400 },
+    );
+  }
+
+  if (typeof organizationIdValue !== "string" || !organizationIdValue) {
+    return NextResponse.json(
+      { ok: false, message: "Missing organizationId." },
       { status: 400 },
     );
   }
@@ -76,16 +93,15 @@ export async function POST(request: Request) {
     savedAt: now,
     updatedAt: now,
   };
-  const supabase = createSupabaseAdminClient();
   const pdfFile = formData.get("pdf");
   let pdfPath: string | null = null;
 
   if (pdfFile && typeof pdfFile === "object" && "arrayBuffer" in pdfFile) {
     const file = pdfFile as File;
     const bytes = Buffer.from(await file.arrayBuffer());
-    pdfPath = `walkthroughs/${id}/${safeFileName(file.name)}`;
+    pdfPath = `${organizationIdValue}/walkthroughs/${id}/${safeFileName(file.name)}`;
 
-    const { error: uploadError } = await supabase.storage
+    const { error: uploadError } = await auth.supabase.storage
       .from(WALKTHROUGH_FILES_BUCKET)
       .upload(pdfPath, bytes, {
         contentType: file.type || "application/pdf",
@@ -100,9 +116,17 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await auth.supabase
     .from("walkthroughs")
-    .insert(estimateToCloudRow({ estimate: savedEstimate, id, pdfPath }))
+    .insert(
+      estimateToCloudRow({
+        estimate: savedEstimate,
+        id,
+        organizationId: organizationIdValue,
+        createdBy: auth.user.id,
+        pdfPath,
+      }),
+    )
     .select("*")
     .single();
 

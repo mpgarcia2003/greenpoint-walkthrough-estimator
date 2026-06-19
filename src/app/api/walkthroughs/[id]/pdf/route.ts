@@ -1,23 +1,22 @@
 import { NextResponse } from "next/server";
 
-import { cloudUnavailableResponse, isWalkthroughApiAuthorized } from "@/app/api/walkthroughs/auth";
-import { createSupabaseAdminClient, hasSupabaseAdminConfig, WALKTHROUGH_FILES_BUCKET } from "@/lib/supabase-admin";
+import {
+  createWalkthroughSupabaseClient,
+  WALKTHROUGH_FILES_BUCKET,
+} from "@/app/api/walkthroughs/auth";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  if (!(await isWalkthroughApiAuthorized())) {
-    return NextResponse.json({ ok: false }, { status: 401 });
-  }
+  const auth = await createWalkthroughSupabaseClient(request);
 
-  if (!hasSupabaseAdminConfig()) {
-    return cloudUnavailableResponse();
+  if (auth.response) {
+    return auth.response;
   }
 
   const { id } = await params;
-  const supabase = createSupabaseAdminClient();
-  const { data: row, error: rowError } = await supabase
+  const { data: row, error: rowError } = await auth.supabase
     .from("walkthroughs")
     .select("title,pdf_path")
     .eq("id", id)
@@ -30,7 +29,7 @@ export async function GET(
     );
   }
 
-  const { data: file, error: fileError } = await supabase.storage
+  const { data: file, error: fileError } = await auth.supabase.storage
     .from(WALKTHROUGH_FILES_BUCKET)
     .download(row.pdf_path);
 
