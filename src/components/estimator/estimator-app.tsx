@@ -316,20 +316,32 @@ export function EstimatorApp({
     }));
   }
 
-  function addEntry(minutes: number) {
+  function addEntry(minutes: number, quantity = 1) {
     if (!Number.isFinite(minutes) || minutes <= 0) {
       return;
     }
 
-    setEntries((currentEntries) => [
-      ...currentEntries,
-      createRoomEntry(
-        currentEntries,
-        selectedRoomType,
-        Math.round(minutes),
-        currentFloor,
-      ),
-    ]);
+    const safeQuantity = Math.min(
+      999,
+      Math.max(1, Math.round(Number.isFinite(quantity) ? quantity : 1)),
+    );
+
+    setEntries((currentEntries) => {
+      const nextEntries = [...currentEntries];
+
+      for (let index = 0; index < safeQuantity; index += 1) {
+        nextEntries.push(
+          createRoomEntry(
+            nextEntries,
+            selectedRoomType,
+            Math.round(minutes),
+            currentFloor,
+          ),
+        );
+      }
+
+      return nextEntries;
+    });
   }
 
   function deleteEntry(id: string) {
@@ -1069,9 +1081,25 @@ function MinuteKeyboard({
   onAddMinutes,
 }: {
   selectedRoomType: RoomType;
-  onAddMinutes: (minutes: number) => void;
+  onAddMinutes: (minutes: number, quantity?: number) => void;
 }) {
   const [customMinutes, setCustomMinutes] = useState("");
+  const [quantity, setQuantity] = useState("");
+
+  function getQuantity() {
+    const parsedQuantity = Number(quantity);
+
+    if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+      return 1;
+    }
+
+    return Math.min(999, Math.max(1, Math.round(parsedQuantity)));
+  }
+
+  function addMinutes(minutes: number) {
+    onAddMinutes(minutes, getQuantity());
+    setQuantity("");
+  }
 
   function submitCustomMinutes() {
     const minutes = Number(customMinutes);
@@ -1080,7 +1108,7 @@ function MinuteKeyboard({
       return;
     }
 
-    onAddMinutes(minutes);
+    addMinutes(minutes);
     setCustomMinutes("");
   }
 
@@ -1097,12 +1125,31 @@ function MinuteKeyboard({
           </p>
         </div>
 
+        <div className="grid gap-2 rounded-md border border-[#31453d] bg-[#0b1311] p-3">
+          <Label htmlFor="room-quantity">Quantity</Label>
+          <Input
+            id="room-quantity"
+            inputMode="numeric"
+            max={999}
+            min={1}
+            placeholder="1"
+            type="number"
+            value={quantity}
+            onChange={(event) =>
+              setQuantity(event.target.value.replace(/\D/g, "").slice(0, 3))
+            }
+          />
+          <p className="text-xs font-medium text-muted-foreground">
+            Blank counts as 1 room
+          </p>
+        </div>
+
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {MINUTE_OPTIONS.map((minutes) => (
             <button
               key={minutes}
               type="button"
-              onClick={() => onAddMinutes(minutes)}
+              onClick={() => addMinutes(minutes)}
               className="flex min-h-16 flex-col items-center justify-center rounded-md border border-[#2e4039] bg-[#0b1311] px-2 text-center text-2xl font-semibold leading-8 text-foreground transition-colors hover:border-primary hover:bg-[#143126] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:bg-primary active:text-primary-foreground"
             >
               {minutes}
