@@ -85,11 +85,14 @@ export interface EstimateDraft {
   facility: FacilityInfo;
   buildings: BuildingInfo[];
   entries: RoomEntry[];
+  walkthroughNotes?: string;
   selectedRoomType: RoomType;
   currentBuildingId: string;
   currentFloor: number;
   cleaningFrequency: CleaningFrequency;
   pricing: PricingInputs;
+  proposalGeneratedAt?: string;
+  proposalPdfPath?: string | null;
   savedAt?: string;
   updatedAt: string;
 }

@@ -23,6 +23,8 @@ export interface CloudWalkthroughRow {
   annual_profit: number;
   estimate: EstimateDraft;
   pdf_path: string | null;
+  proposal_pdf_path: string | null;
+  proposal_generated_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -66,6 +68,8 @@ export function estimateToCloudRow({
     annual_profit: cost.grossAnnualProfit,
     estimate,
     pdf_path: pdfPath ?? null,
+    proposal_pdf_path: null,
+    proposal_generated_at: null,
   };
 }
 
@@ -73,6 +77,8 @@ export function cloudRowToEstimate(row: CloudWalkthroughRow): EstimateDraft {
   return {
     ...row.estimate,
     id: row.id,
+    proposalGeneratedAt: row.proposal_generated_at ?? undefined,
+    proposalPdfPath: row.proposal_pdf_path,
     savedAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -18,7 +18,7 @@ export async function DELETE(
   const { id } = await params;
   const { data, error: rowError } = await auth.supabase
     .from("walkthroughs")
-    .select("pdf_path")
+    .select("pdf_path,proposal_pdf_path")
     .eq("id", id)
     .single();
 
@@ -29,10 +29,12 @@ export async function DELETE(
     );
   }
 
-  if (data?.pdf_path) {
-    await auth.supabase.storage
-      .from(WALKTHROUGH_FILES_BUCKET)
-      .remove([data.pdf_path]);
+  const paths = [data?.pdf_path, data?.proposal_pdf_path].filter(
+    (path): path is string => Boolean(path),
+  );
+
+  if (paths.length) {
+    await auth.supabase.storage.from(WALKTHROUGH_FILES_BUCKET).remove(paths);
   }
 
   const { error } = await auth.supabase

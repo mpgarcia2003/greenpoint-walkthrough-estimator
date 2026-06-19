@@ -51,6 +51,12 @@ alter table public.walkthroughs
 alter table public.walkthroughs
   add column if not exists created_by uuid references auth.users(id) on delete set null;
 
+alter table public.walkthroughs
+  add column if not exists proposal_pdf_path text;
+
+alter table public.walkthroughs
+  add column if not exists proposal_generated_at timestamptz;
+
 create index if not exists walkthroughs_created_at_idx
   on public.walkthroughs (created_at desc);
 

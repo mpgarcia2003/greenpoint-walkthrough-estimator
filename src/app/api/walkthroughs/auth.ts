@@ -22,6 +22,8 @@ type WalkthroughRow = {
   annual_profit: number;
   estimate: EstimateDraft;
   pdf_path: string | null;
+  proposal_pdf_path: string | null;
+  proposal_generated_at: string | null;
   created_at: string;
   updated_at: string;
 };

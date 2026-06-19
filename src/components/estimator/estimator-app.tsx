@@ -41,10 +41,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import {
   deleteCloudWalkthrough,
+  downloadCloudWalkthroughProposal,
   downloadCloudWalkthroughPdf,
   listCloudWalkthroughs,
+  saveCloudWalkthroughProposal,
   saveCloudWalkthrough,
 } from "@/lib/cloud-walkthroughs";
 import {
@@ -87,6 +90,11 @@ import {
   exportPdfEstimate,
   getPdfEstimateFileName,
 } from "@/lib/exports";
+import {
+  createProposalPdfBlob,
+  exportProposalPdf,
+  getProposalPdfFileName,
+} from "@/lib/proposals";
 import {
   clearActiveEstimate,
   deleteSavedEstimate as deleteSavedEstimateRecord,
@@ -179,6 +187,7 @@ export function EstimatorApp({
     getDefaultBuildings(DEFAULT_FACILITY.numberOfFloors),
   );
   const [entries, setEntries] = useState<RoomEntry[]>([]);
+  const [walkthroughNotes, setWalkthroughNotes] = useState("");
   const [selectedRoomType, setSelectedRoomType] = useState<RoomType>("Classroom");
   const [currentBuildingId, setCurrentBuildingId] =
     useState(DEFAULT_BUILDING_ID);
@@ -283,6 +292,7 @@ export function EstimatorApp({
         facility,
         buildings,
         entries,
+        walkthroughNotes,
         selectedRoomType,
         currentBuildingId: activeBuilding.id,
         currentFloor,
@@ -298,6 +308,7 @@ export function EstimatorApp({
       facility,
       pricing,
       selectedRoomType,
+      walkthroughNotes,
     ],
   );
 
@@ -327,6 +338,7 @@ export function EstimatorApp({
         setFacility(nextFacility);
         setBuildings(nextBuildings);
         setEntries(normalizeEntries(savedDraft.entries ?? []));
+        setWalkthroughNotes(savedDraft.walkthroughNotes ?? "");
         setSelectedRoomType(savedDraft.selectedRoomType ?? "Classroom");
         setCurrentBuildingId(
           nextBuildings.some((building) => building.id === nextBuildingId)
@@ -464,6 +476,7 @@ export function EstimatorApp({
     setFacility({ ...DEFAULT_FACILITY });
     setBuildings(getDefaultBuildings(DEFAULT_FACILITY.numberOfFloors));
     setEntries([]);
+    setWalkthroughNotes("");
     setSelectedRoomType("Classroom");
     setCurrentBuildingId(DEFAULT_BUILDING_ID);
     setCurrentFloor(1);
@@ -603,6 +616,7 @@ export function EstimatorApp({
     setFacility({ ...DEFAULT_FACILITY, ...normalizedEstimate.facility });
     setBuildings(normalizedEstimate.buildings);
     setEntries(normalizedEstimate.entries);
+    setWalkthroughNotes(normalizedEstimate.walkthroughNotes ?? "");
     setSelectedRoomType(normalizedEstimate.selectedRoomType ?? "Classroom");
     setCurrentBuildingId(normalizedEstimate.currentBuildingId);
     setCurrentFloor(normalizedEstimate.currentFloor);
@@ -655,6 +669,39 @@ export function EstimatorApp({
     }
   }
 
+  async function openSavedProposal(estimate: EstimateDraft) {
+    try {
+      if (historyMode === "cloud") {
+        if (!estimate.proposalPdfPath) {
+          const fileName = getProposalPdfFileName(estimate);
+
+          await saveCloudWalkthroughProposal({
+            id: estimate.id,
+            proposalBlob: createProposalPdfBlob(estimate),
+            proposalFileName: fileName,
+          });
+          setHistoryStatus({
+            tone: "success",
+            message: `Proposal generated and saved: ${fileName}`,
+          });
+        }
+
+        await downloadCloudWalkthroughProposal(estimate.id);
+        await refreshSavedHistory();
+        return;
+      }
+
+      runExport(() => exportProposalPdf(estimate), "Proposal PDF");
+    } catch (error) {
+      console.error(error);
+      setHistoryStatus({
+        tone: "error",
+        message:
+          "Could not generate or download the proposal PDF. Make sure the Supabase schema has been updated.",
+      });
+    }
+  }
+
   if (step === "facility") {
     return (
       <FacilityScreen
@@ -683,6 +730,7 @@ export function EstimatorApp({
         userEmail={userEmail}
         onChangeOrganization={onChangeOrganization}
         onDelete={deleteWalkthroughSnapshot}
+        onGenerateProposal={openSavedProposal}
         onExportPdf={(estimate) => {
           if (historyMode === "cloud") {
             downloadCloudWalkthroughPdf(estimate.id).catch(() =>
@@ -781,6 +829,10 @@ export function EstimatorApp({
               staffing={staffing}
               onChangeFrequency={setCleaningFrequency}
             />
+            <WalkthroughNotesPanel
+              notes={walkthroughNotes}
+              onChangeNotes={setWalkthroughNotes}
+            />
           </div>
 
           <div className="grid gap-4">
@@ -808,11 +860,18 @@ export function EstimatorApp({
 
                 runExport(() => exportPdfEstimate(estimate), "Saved PDF export");
               }}
+              onGenerateProposal={openSavedProposal}
               onReopen={reopenSavedWalkthrough}
               onSaveCurrent={saveWalkthroughSnapshot}
             />
             <ExportPanel
               status={exportStatus}
+              onProposal={() =>
+                runExport(
+                  () => exportProposalPdf(estimateDraft),
+                  "Proposal PDF",
+                )
+              }
               onPdf={() =>
                 runExport(() => exportPdfEstimate(estimateDraft), "PDF export")
               }
@@ -856,6 +915,7 @@ function SavedWalkthroughDashboard({
   onChangeOrganization,
   onDelete,
   onExportPdf,
+  onGenerateProposal,
   onNewEstimate,
   onOpen,
   onRefresh,
@@ -873,6 +933,7 @@ function SavedWalkthroughDashboard({
   onChangeOrganization: (organizationId: string) => void;
   onDelete: (id: string) => void;
   onExportPdf: (estimate: EstimateDraft) => void;
+  onGenerateProposal: (estimate: EstimateDraft) => void;
   onNewEstimate: () => void;
   onOpen: (estimate: EstimateDraft) => void;
   onRefresh: () => void;
@@ -1119,6 +1180,14 @@ function SavedWalkthroughDashboard({
                           {metrics.cleaningFrequency}
                         </span>
                       </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Proposal</span>
+                        <span className="text-right font-medium">
+                          {estimate.proposalGeneratedAt
+                            ? "Ready"
+                            : "Not generated"}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
@@ -1132,10 +1201,17 @@ function SavedWalkthroughDashboard({
                       ))}
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                       <Button variant="secondary" onClick={() => onOpen(estimate)}>
                         <RotateCcw className="size-4" />
                         Open
+                      </Button>
+                      <Button
+                        variant="default"
+                        onClick={() => onGenerateProposal(estimate)}
+                      >
+                        <FileText className="size-4" />
+                        Proposal
                       </Button>
                       <Button
                         variant="secondary"
@@ -2326,6 +2402,33 @@ function StaffingPanel({
   );
 }
 
+function WalkthroughNotesPanel({
+  notes,
+  onChangeNotes,
+}: {
+  notes: string;
+  onChangeNotes: (notes: string) => void;
+}) {
+  return (
+    <Card className="bg-[#101816]">
+      <CardHeader>
+        <CardTitle>Walkthrough Notes</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <Label htmlFor="walkthrough-notes">
+          Proposal notes and special scope items
+        </Label>
+        <Textarea
+          id="walkthrough-notes"
+          value={notes}
+          onChange={(event) => onChangeNotes(event.target.value)}
+          placeholder="Example: Window cleaning required 3x per year. Loading dock needs weekly pressure washing. Client wants day porter option priced separately."
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
 function DashboardSummary({
   totals,
   costSummary,
@@ -2519,6 +2622,7 @@ function SavedWalkthroughsPanel({
   status,
   onDelete,
   onExportPdf,
+  onGenerateProposal,
   onReopen,
   onSaveCurrent,
 }: {
@@ -2530,6 +2634,7 @@ function SavedWalkthroughsPanel({
   } | null;
   onDelete: (id: string) => void;
   onExportPdf: (estimate: EstimateDraft) => void;
+  onGenerateProposal: (estimate: EstimateDraft) => void;
   onReopen: (estimate: EstimateDraft) => void;
   onSaveCurrent: () => void;
 }) {
@@ -2612,9 +2717,13 @@ function SavedWalkthroughsPanel({
                     <p className="text-right font-semibold">
                       {formatCurrency(cost.recommendedAnnualContract)}
                     </p>
+                    <p className="text-muted-foreground">Proposal</p>
+                    <p className="text-right font-semibold">
+                      {estimate.proposalGeneratedAt ? "Ready" : "Not generated"}
+                    </p>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-3 gap-2">
+                  <div className="mt-3 grid grid-cols-2 gap-2">
                     <Button
                       className="h-10"
                       variant="secondary"
@@ -2622,6 +2731,13 @@ function SavedWalkthroughsPanel({
                     >
                       <RotateCcw className="size-4" />
                       Open
+                    </Button>
+                    <Button
+                      className="h-10"
+                      onClick={() => onGenerateProposal(estimate)}
+                    >
+                      <FileText className="size-4" />
+                      Proposal
                     </Button>
                     <Button
                       className="h-10"
@@ -2652,6 +2768,7 @@ function SavedWalkthroughsPanel({
 
 function ExportPanel({
   status,
+  onProposal,
   onPdf,
   onExcel,
   onCsv,
@@ -2660,6 +2777,7 @@ function ExportPanel({
     tone: "success" | "error";
     message: string;
   } | null;
+  onProposal: () => void;
   onPdf: () => void;
   onExcel: () => void;
   onCsv: () => void;
@@ -2670,7 +2788,14 @@ function ExportPanel({
         <CardTitle>Export Features</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <Button
+            className="h-12"
+            onClick={onProposal}
+          >
+            <FileText className="size-4" />
+            Proposal PDF
+          </Button>
           <Button
             className="h-12"
             variant="secondary"

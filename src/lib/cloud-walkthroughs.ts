@@ -112,3 +112,43 @@ export async function downloadCloudWalkthroughPdf(id: string) {
   const blob = await response.blob();
   downloadBlob(blob, getFileNameFromDisposition(response.headers.get("Content-Disposition")));
 }
+
+export async function saveCloudWalkthroughProposal({
+  id,
+  proposalBlob,
+  proposalFileName,
+}: {
+  id: string;
+  proposalBlob: Blob;
+  proposalFileName: string;
+}) {
+  const formData = new FormData();
+  formData.append("proposal", proposalBlob, proposalFileName);
+
+  const response = await fetch(`/api/walkthroughs/${id}/proposal`, {
+    body: formData,
+    headers: await getAuthHeaders(),
+    method: "POST",
+  });
+  await assertOk(response);
+
+  return (await response.json()) as {
+    ok: true;
+    proposalGeneratedAt: string;
+    proposalPdfPath: string;
+  };
+}
+
+export async function downloadCloudWalkthroughProposal(id: string) {
+  const response = await fetch(`/api/walkthroughs/${id}/proposal`, {
+    headers: await getAuthHeaders(),
+    method: "GET",
+  });
+  await assertOk(response);
+
+  const blob = await response.blob();
+  downloadBlob(
+    blob,
+    getFileNameFromDisposition(response.headers.get("Content-Disposition")),
+  );
+}
