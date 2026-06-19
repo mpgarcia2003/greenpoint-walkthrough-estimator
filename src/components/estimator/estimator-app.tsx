@@ -3,6 +3,7 @@
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Archive,
   Building2,
   Camera,
   ClipboardList,
@@ -14,8 +15,10 @@ import {
   Layers3,
   Mic,
   Pencil,
+  Plus,
   Play,
   QrCode,
+  RotateCcw,
   Save,
   Sparkles,
   Trash2,
@@ -41,11 +44,16 @@ import {
   facilityLabel,
   formatCurrency,
   formatNumber,
+  getEntriesForFloor,
+  getEntryFloor,
   getCostSummary,
+  getFloorNumbers,
+  getFloorSummaries,
   getRoomBreakdown,
   getStaffingTotals,
   getTotals,
   normalizeCleaningFrequency,
+  normalizeFloorNumber,
   updateRoomEntry,
 } from "@/lib/calculations";
 import {
@@ -61,9 +69,17 @@ import {
   exportExcelEstimate,
   exportPdfEstimate,
 } from "@/lib/exports";
-import { clearActiveEstimate, loadActiveEstimate, saveActiveEstimate } from "@/lib/storage";
+import {
+  clearActiveEstimate,
+  deleteSavedEstimate as deleteSavedEstimateRecord,
+  listSavedEstimates,
+  loadActiveEstimate,
+  saveActiveEstimate,
+  saveEstimateSnapshot,
+} from "@/lib/storage";
 import type {
   CleaningFrequency,
+  EstimateDraft,
   FacilityInfo,
   FacilityType,
   PricingInputs,
@@ -78,6 +94,7 @@ type EditingEntry = {
   id: string;
   roomType: RoomType;
   minutes: number;
+  floorNumber: number;
   cleaningFrequency?: CleaningFrequency;
 };
 
@@ -89,14 +106,23 @@ const roomAccentClasses = [
   "bg-[#a3e635]",
 ];
 
+function normalizeEntries(entries: RoomEntry[]) {
+  return entries.map((entry) => ({
+    ...entry,
+    floorNumber: normalizeFloorNumber(entry.floorNumber),
+  }));
+}
+
 export function EstimatorApp() {
   const [step, setStep] = useState<AppStep>("facility");
   const [facility, setFacility] = useState<FacilityInfo>({ ...DEFAULT_FACILITY });
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [selectedRoomType, setSelectedRoomType] = useState<RoomType>("Classroom");
+  const [currentFloor, setCurrentFloor] = useState(1);
   const [cleaningFrequency, setCleaningFrequency] =
     useState<CleaningFrequency>("5 days/week");
   const [pricing, setPricing] = useState<PricingInputs>({ ...DEFAULT_PRICING });
+  const [savedEstimates, setSavedEstimates] = useState<EstimateDraft[]>([]);
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"loading" | "saving" | "saved">(
     "loading",
@@ -105,10 +131,32 @@ export function EstimatorApp() {
     tone: "success" | "error";
     message: string;
   } | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [editingEntry, setEditingEntry] = useState<EditingEntry | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
   const totals = useMemo(() => getTotals(entries), [entries]);
+  const floorNumbers = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...getFloorNumbers(facility.numberOfFloors, entries),
+          currentFloor,
+        ]),
+      ).sort((a, b) => a - b),
+    [currentFloor, entries, facility.numberOfFloors],
+  );
+  const currentFloorEntries = useMemo(
+    () => getEntriesForFloor(entries, currentFloor),
+    [currentFloor, entries],
+  );
+  const currentFloorTotals = useMemo(
+    () => getTotals(currentFloorEntries),
+    [currentFloorEntries],
+  );
   const breakdown = useMemo(
     () => getRoomBreakdown(entries, cleaningFrequency),
     [cleaningFrequency, entries],
@@ -121,23 +169,37 @@ export function EstimatorApp() {
     () => getCostSummary(staffing, pricing),
     [pricing, staffing],
   );
+  const floorSummaries = useMemo(
+    () =>
+      getFloorSummaries({
+        entries,
+        numberOfFloors: facility.numberOfFloors,
+        cleaningFrequency,
+        pricing,
+      }),
+    [cleaningFrequency, entries, facility.numberOfFloors, pricing],
+  );
   const estimateDraft = useMemo(
     () =>
       buildEstimateDraft({
         facility,
         entries,
         selectedRoomType,
+        currentFloor,
         cleaningFrequency,
         pricing,
       }),
-    [cleaningFrequency, entries, facility, pricing, selectedRoomType],
+    [cleaningFrequency, currentFloor, entries, facility, pricing, selectedRoomType],
   );
 
   useEffect(() => {
     let mounted = true;
 
     async function restoreDraft() {
-      const savedDraft = await loadActiveEstimate();
+      const [savedDraft, savedHistory] = await Promise.all([
+        loadActiveEstimate(),
+        listSavedEstimates(),
+      ]);
 
       if (!mounted) {
         return;
@@ -145,8 +207,9 @@ export function EstimatorApp() {
 
       if (savedDraft) {
         setFacility({ ...DEFAULT_FACILITY, ...savedDraft.facility });
-        setEntries(savedDraft.entries ?? []);
+        setEntries(normalizeEntries(savedDraft.entries ?? []));
         setSelectedRoomType(savedDraft.selectedRoomType ?? "Classroom");
+        setCurrentFloor(normalizeFloorNumber(savedDraft.currentFloor));
         setCleaningFrequency(
           normalizeCleaningFrequency(savedDraft.cleaningFrequency),
         );
@@ -154,6 +217,7 @@ export function EstimatorApp() {
         setStep(savedDraft.entries?.length ? "walkthrough" : "facility");
       }
 
+      setSavedEstimates(savedHistory);
       setDraftLoaded(true);
       setSaveStatus("saved");
     }
@@ -211,7 +275,12 @@ export function EstimatorApp() {
 
     setEntries((currentEntries) => [
       ...currentEntries,
-      createRoomEntry(currentEntries, selectedRoomType, Math.round(minutes)),
+      createRoomEntry(
+        currentEntries,
+        selectedRoomType,
+        Math.round(minutes),
+        currentFloor,
+      ),
     ]);
   }
 
@@ -231,6 +300,7 @@ export function EstimatorApp() {
       updateRoomEntry(currentEntries, editingEntry.id, {
         roomType: editingEntry.roomType,
         minutes: editingEntry.minutes,
+        floorNumber: editingEntry.floorNumber,
         cleaningFrequency: editingEntry.cleaningFrequency,
       }),
     );
@@ -241,12 +311,80 @@ export function EstimatorApp() {
     setFacility({ ...DEFAULT_FACILITY });
     setEntries([]);
     setSelectedRoomType("Classroom");
+    setCurrentFloor(1);
     setCleaningFrequency("5 days/week");
     setPricing({ ...DEFAULT_PRICING });
     setEditingEntry(null);
     setStep("facility");
     await clearActiveEstimate();
     setSaveStatus("saved");
+  }
+
+  function addFloor() {
+    const nextFloor = normalizeFloorNumber(facility.numberOfFloors) + 1;
+    setFacility((current) => ({
+      ...current,
+      numberOfFloors: nextFloor,
+    }));
+    setCurrentFloor(nextFloor);
+  }
+
+  async function refreshSavedHistory() {
+    setSavedEstimates(await listSavedEstimates());
+  }
+
+  async function saveWalkthroughSnapshot() {
+    try {
+      const savedEstimate = await saveEstimateSnapshot(estimateDraft);
+      await refreshSavedHistory();
+      setHistoryStatus({
+        tone: "success",
+        message: `Saved walkthrough: ${facilityLabel(savedEstimate.facility)}`,
+      });
+    } catch (error) {
+      console.error(error);
+      setHistoryStatus({
+        tone: "error",
+        message: "Could not save this walkthrough.",
+      });
+    }
+  }
+
+  async function reopenSavedWalkthrough(estimate: EstimateDraft) {
+    const normalizedEstimate: EstimateDraft = {
+      ...estimate,
+      entries: normalizeEntries(estimate.entries),
+      currentFloor: normalizeFloorNumber(estimate.currentFloor),
+      cleaningFrequency: normalizeCleaningFrequency(estimate.cleaningFrequency),
+    };
+
+    setFacility({ ...DEFAULT_FACILITY, ...normalizedEstimate.facility });
+    setEntries(normalizedEstimate.entries);
+    setSelectedRoomType(normalizedEstimate.selectedRoomType ?? "Classroom");
+    setCurrentFloor(normalizedEstimate.currentFloor);
+    setCleaningFrequency(normalizedEstimate.cleaningFrequency);
+    setPricing({ ...DEFAULT_PRICING, ...normalizedEstimate.pricing });
+    setEditingEntry(null);
+    setStep("walkthrough");
+    await saveActiveEstimate({
+      ...normalizedEstimate,
+      id: estimateDraft.id,
+      savedAt: undefined,
+      updatedAt: new Date().toISOString(),
+    });
+    setHistoryStatus({
+      tone: "success",
+      message: `Reopened ${facilityLabel(normalizedEstimate.facility)}`,
+    });
+  }
+
+  async function deleteWalkthroughSnapshot(id: string) {
+    await deleteSavedEstimateRecord(id);
+    await refreshSavedHistory();
+    setHistoryStatus({
+      tone: "success",
+      message: "Saved walkthrough deleted.",
+    });
   }
 
   function runExport(exporter: () => string, label: string) {
@@ -288,6 +426,15 @@ export function EstimatorApp() {
       />
 
       <main className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-3 py-4 sm:px-5 lg:px-6">
+        <FloorWorkflowPanel
+          currentFloor={currentFloor}
+          currentFloorTotals={currentFloorTotals}
+          floorNumbers={floorNumbers}
+          floorSummaries={floorSummaries}
+          onAddFloor={addFloor}
+          onSelectFloor={setCurrentFloor}
+        />
+
         <div className="grid gap-4 xl:grid-cols-[minmax(310px,0.95fr)_minmax(350px,1fr)_minmax(360px,1.05fr)]">
           <RoomTypeSelector
             selectedRoomType={selectedRoomType}
@@ -300,15 +447,18 @@ export function EstimatorApp() {
           />
 
           <RoomLogPanel
-            entries={entries}
+            entries={currentFloorEntries}
             editingEntry={editingEntry}
             defaultFrequency={cleaningFrequency}
+            currentFloor={currentFloor}
+            floorNumbers={floorNumbers}
             logEndRef={logEndRef}
             onStartEdit={(entry) =>
               setEditingEntry({
                 id: entry.id,
                 roomType: entry.roomType,
                 minutes: entry.minutes,
+                floorNumber: getEntryFloor(entry),
                 cleaningFrequency: entry.cleaningFrequency
                   ? normalizeCleaningFrequency(entry.cleaningFrequency)
                   : undefined,
@@ -337,6 +487,16 @@ export function EstimatorApp() {
               pricing={pricing}
               costSummary={costSummary}
               onUpdatePricing={updatePricing}
+            />
+            <SavedWalkthroughsPanel
+              savedEstimates={savedEstimates}
+              status={historyStatus}
+              onDelete={deleteWalkthroughSnapshot}
+              onExportPdf={(estimate) =>
+                runExport(() => exportPdfEstimate(estimate), "Saved PDF export")
+              }
+              onReopen={reopenSavedWalkthrough}
+              onSaveCurrent={saveWalkthroughSnapshot}
             />
             <ExportPanel
               status={exportStatus}
@@ -803,10 +963,120 @@ function MinuteKeyboard({
   );
 }
 
+function FloorWorkflowPanel({
+  currentFloor,
+  currentFloorTotals,
+  floorNumbers,
+  floorSummaries,
+  onAddFloor,
+  onSelectFloor,
+}: {
+  currentFloor: number;
+  currentFloorTotals: ReturnType<typeof getTotals>;
+  floorNumbers: number[];
+  floorSummaries: ReturnType<typeof getFloorSummaries>;
+  onAddFloor: () => void;
+  onSelectFloor: (floorNumber: number) => void;
+}) {
+  return (
+    <Card className="bg-[#101816]">
+      <CardHeader>
+        <CardTitle>Floor Workflow</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {floorNumbers.map((floorNumber) => {
+            const selected = currentFloor === floorNumber;
+
+            return (
+              <button
+                key={floorNumber}
+                type="button"
+                onClick={() => onSelectFloor(floorNumber)}
+                className={cn(
+                  "min-h-12 shrink-0 rounded-md border px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  selected
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-[#0b1311] text-foreground hover:border-primary",
+                )}
+              >
+                Floor {floorNumber}
+              </button>
+            );
+          })}
+          <Button className="h-12 shrink-0" variant="secondary" onClick={onAddFloor}>
+            <Plus className="size-4" />
+            Add Floor
+          </Button>
+        </div>
+
+        <div className="grid gap-2 md:grid-cols-4">
+          <SummaryLine
+            label={`Floor ${currentFloor} Rooms`}
+            value={formatNumber(currentFloorTotals.totalRooms, 0)}
+          />
+          <SummaryLine
+            label={`Floor ${currentFloor} Minutes`}
+            value={formatNumber(currentFloorTotals.totalMinutes, 0)}
+          />
+          <SummaryLine
+            label={`Floor ${currentFloor} Hours`}
+            value={formatNumber(currentFloorTotals.totalHours)}
+          />
+          <SummaryLine
+            label="Active Floor"
+            value={`Floor ${currentFloor}`}
+            emphasis
+          />
+        </div>
+
+        <div className="grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
+          {floorSummaries.map((floor) => (
+            <div
+              key={floor.floorNumber}
+              className={cn(
+                "rounded-md border bg-[#0b1311] p-3",
+                currentFloor === floor.floorNumber
+                  ? "border-primary/70"
+                  : "border-border",
+              )}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-semibold text-foreground">
+                  Floor {floor.floorNumber}
+                </p>
+                <Badge className="border-[#31453d] bg-[#101816]">
+                  {floor.totals.totalRooms} rooms
+                </Badge>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <p className="text-muted-foreground">Minutes</p>
+                <p className="text-right font-semibold">
+                  {formatNumber(floor.totals.totalMinutes, 0)}
+                </p>
+                <p className="text-muted-foreground">Monthly Price</p>
+                <p className="text-right font-semibold">
+                  {formatCurrency(floor.cost.recommendedMonthlyContract)}
+                </p>
+                <p className="text-muted-foreground">Monthly Profit</p>
+                <p className="text-right font-semibold text-primary">
+                  {formatCurrency(floor.cost.grossMonthlyProfit)}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function RoomLogPanel({
   entries,
   editingEntry,
   defaultFrequency,
+  currentFloor,
+  floorNumbers,
   logEndRef,
   onStartEdit,
   onCancelEdit,
@@ -817,6 +1087,8 @@ function RoomLogPanel({
   entries: RoomEntry[];
   editingEntry: EditingEntry | null;
   defaultFrequency: CleaningFrequency;
+  currentFloor: number;
+  floorNumbers: number[];
   logEndRef: RefObject<HTMLDivElement | null>;
   onStartEdit: (entry: RoomEntry) => void;
   onCancelEdit: () => void;
@@ -827,7 +1099,7 @@ function RoomLogPanel({
   return (
     <Card className="bg-[#101816] xl:min-h-[520px]">
       <CardHeader>
-        <CardTitle>Room Log Panel</CardTitle>
+        <CardTitle>Floor {currentFloor} Room Log</CardTitle>
       </CardHeader>
       <CardContent>
         <div className="max-h-[520px] overflow-y-auto pr-1">
@@ -852,6 +1124,7 @@ function RoomLogPanel({
                         </p>
                         <p className="text-sm text-muted-foreground">
                           {entry.minutes} min -{" "}
+                          Floor {getEntryFloor(entry)} -{" "}
                           {entry.cleaningFrequency
                             ? normalizeCleaningFrequency(entry.cleaningFrequency)
                             : `Default: ${defaultFrequency}`}
@@ -966,6 +1239,33 @@ function RoomLogPanel({
                               {FREQUENCY_OPTIONS.map((option) => (
                                 <SelectItem key={option.value} value={option.value}>
                                   {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="grid gap-2">
+                          <Label>Floor</Label>
+                          <Select
+                            value={String(editingEntry.floorNumber)}
+                            onValueChange={(value) =>
+                              onChangeEdit({
+                                ...editingEntry,
+                                floorNumber: normalizeFloorNumber(Number(value)),
+                              })
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {floorNumbers.map((floorNumber) => (
+                                <SelectItem
+                                  key={floorNumber}
+                                  value={String(floorNumber)}
+                                >
+                                  Floor {floorNumber}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -1265,6 +1565,131 @@ function PricingInput({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function SavedWalkthroughsPanel({
+  savedEstimates,
+  status,
+  onDelete,
+  onExportPdf,
+  onReopen,
+  onSaveCurrent,
+}: {
+  savedEstimates: EstimateDraft[];
+  status: {
+    tone: "success" | "error";
+    message: string;
+  } | null;
+  onDelete: (id: string) => void;
+  onExportPdf: (estimate: EstimateDraft) => void;
+  onReopen: (estimate: EstimateDraft) => void;
+  onSaveCurrent: () => void;
+}) {
+  return (
+    <Card className="bg-[#101816]">
+      <CardHeader>
+        <CardTitle>Saved Walkthroughs</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <Button className="h-12" onClick={onSaveCurrent}>
+          <Archive className="size-4" />
+          Save Walkthrough
+        </Button>
+
+        {status ? (
+          <div
+            className={cn(
+              "rounded-md border px-3 py-2 text-sm font-medium",
+              status.tone === "success"
+                ? "border-primary/50 bg-primary/10 text-[#c7f8d9]"
+                : "border-destructive/60 bg-destructive/10 text-[#ffd0d0]",
+            )}
+          >
+            {status.message}
+          </div>
+        ) : null}
+
+        <div className="grid gap-2">
+          {savedEstimates.length === 0 ? (
+            <div className="rounded-md border border-dashed border-[#344840] bg-[#0b1311] p-4 text-center text-sm text-muted-foreground">
+              No saved walkthroughs yet
+            </div>
+          ) : (
+            savedEstimates.map((estimate) => {
+              const totals = getTotals(estimate.entries);
+              const staffing = getStaffingTotals(
+                estimate.entries,
+                normalizeCleaningFrequency(estimate.cleaningFrequency),
+              );
+              const cost = getCostSummary(staffing, estimate.pricing);
+
+              return (
+                <div
+                  key={estimate.id}
+                  className="rounded-md border border-border bg-[#0b1311] p-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-foreground">
+                        {facilityLabel(estimate.facility)}
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {estimate.facility.clientName || "No client"} -{" "}
+                        {estimate.savedAt
+                          ? new Date(estimate.savedAt).toLocaleString()
+                          : "Saved"}
+                      </p>
+                    </div>
+                    <Badge className="border-[#31453d] bg-[#101816]">
+                      {totals.totalRooms} rooms
+                    </Badge>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                    <p className="text-muted-foreground">Monthly Price</p>
+                    <p className="text-right font-semibold">
+                      {formatCurrency(cost.recommendedMonthlyContract)}
+                    </p>
+                    <p className="text-muted-foreground">Annual Price</p>
+                    <p className="text-right font-semibold">
+                      {formatCurrency(cost.recommendedAnnualContract)}
+                    </p>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-3 gap-2">
+                    <Button
+                      className="h-10"
+                      variant="secondary"
+                      onClick={() => onReopen(estimate)}
+                    >
+                      <RotateCcw className="size-4" />
+                      Open
+                    </Button>
+                    <Button
+                      className="h-10"
+                      variant="secondary"
+                      onClick={() => onExportPdf(estimate)}
+                    >
+                      <FileText className="size-4" />
+                      PDF
+                    </Button>
+                    <Button
+                      className="h-10"
+                      variant="destructive"
+                      onClick={() => onDelete(estimate.id)}
+                    >
+                      <Trash2 className="size-4" />
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

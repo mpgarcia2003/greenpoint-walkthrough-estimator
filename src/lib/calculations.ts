@@ -5,6 +5,7 @@ import type {
   EstimateDraft,
   EstimateTotals,
   FacilityInfo,
+  FloorSummary,
   PricingInputs,
   RoomBreakdown,
   RoomEntry,
@@ -43,6 +44,14 @@ export function getTotals(entries: RoomEntry[]): EstimateTotals {
     totalMinutes,
     totalHours: formatHours(totalMinutes),
   };
+}
+
+export function normalizeFloorNumber(floorNumber?: number) {
+  if (!Number.isFinite(floorNumber) || !floorNumber || floorNumber < 1) {
+    return 1;
+  }
+
+  return Math.round(floorNumber);
 }
 
 export function normalizeCleaningFrequency(
@@ -84,6 +93,7 @@ export function createRoomEntry(
   entries: RoomEntry[],
   roomType: RoomType,
   minutes: number,
+  floorNumber = 1,
   cleaningFrequency?: CleaningFrequency,
 ): RoomEntry {
   const now = new Date().toISOString();
@@ -92,11 +102,62 @@ export function createRoomEntry(
     id: createId(),
     roomType,
     roomNumber: getNextRoomNumber(entries, roomType),
+    floorNumber: normalizeFloorNumber(floorNumber),
     minutes,
     cleaningFrequency,
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export function getEntryFloor(entry: RoomEntry) {
+  return normalizeFloorNumber(entry.floorNumber);
+}
+
+export function getEntriesForFloor(entries: RoomEntry[], floorNumber: number) {
+  return entries.filter((entry) => getEntryFloor(entry) === floorNumber);
+}
+
+export function getFloorNumbers(
+  numberOfFloors: number,
+  entries: RoomEntry[] = [],
+) {
+  const floorNumbers = new Set<number>();
+  const facilityFloors = Math.max(1, normalizeFloorNumber(numberOfFloors));
+
+  for (let floorNumber = 1; floorNumber <= facilityFloors; floorNumber += 1) {
+    floorNumbers.add(floorNumber);
+  }
+
+  entries.forEach((entry) => floorNumbers.add(getEntryFloor(entry)));
+
+  return Array.from(floorNumbers).sort((a, b) => a - b);
+}
+
+export function getFloorSummaries({
+  entries,
+  numberOfFloors,
+  cleaningFrequency,
+  pricing,
+}: {
+  entries: RoomEntry[];
+  numberOfFloors: number;
+  cleaningFrequency: CleaningFrequency;
+  pricing: PricingInputs;
+}): FloorSummary[] {
+  return getFloorNumbers(numberOfFloors, entries).map((floorNumber) => {
+    const floorEntries = getEntriesForFloor(entries, floorNumber);
+    const totals = getTotals(floorEntries);
+    const staffing = getStaffingTotals(floorEntries, cleaningFrequency);
+    const cost = getCostSummary(staffing, pricing);
+
+    return {
+      floorNumber,
+      totals,
+      staffing,
+      cost,
+    };
+  });
 }
 
 export function getRoomBreakdown(
@@ -183,6 +244,7 @@ export function updateRoomEntry(
   id: string,
   updates: Pick<RoomEntry, "roomType" | "minutes"> & {
     cleaningFrequency?: CleaningFrequency;
+    floorNumber?: number;
   },
 ) {
   const entryBeingUpdated = entries.find((entry) => entry.id === id);
@@ -208,6 +270,7 @@ export function updateRoomEntry(
         : entry.roomNumber,
       minutes: updates.minutes,
       cleaningFrequency: updates.cleaningFrequency,
+      floorNumber: normalizeFloorNumber(updates.floorNumber ?? entry.floorNumber),
       updatedAt: now,
     };
   });
@@ -217,6 +280,7 @@ export function buildEstimateDraft({
   facility,
   entries,
   selectedRoomType,
+  currentFloor,
   cleaningFrequency,
   pricing,
 }: Omit<EstimateDraft, "id" | "updatedAt">): EstimateDraft {
@@ -225,6 +289,7 @@ export function buildEstimateDraft({
     facility,
     entries,
     selectedRoomType,
+    currentFloor,
     cleaningFrequency,
     pricing,
     updatedAt: new Date().toISOString(),

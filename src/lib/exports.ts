@@ -8,6 +8,8 @@ import {
   formatCurrency,
   formatNumber,
   getCostSummary,
+  getEntryFloor,
+  getFloorSummaries,
   getRoomBreakdown,
   getStaffingTotals,
   getTotals,
@@ -36,12 +38,18 @@ function getExportModel(estimate: EstimateDraft) {
   const breakdown = getRoomBreakdown(estimate.entries, defaultFrequency);
   const staffing = getStaffingTotals(estimate.entries, defaultFrequency);
   const cost = getCostSummary(staffing, estimate.pricing);
+  const floorSummaries = getFloorSummaries({
+    entries: estimate.entries,
+    numberOfFloors: estimate.facility.numberOfFloors,
+    cleaningFrequency: defaultFrequency,
+    pricing: estimate.pricing,
+  });
 
-  return { totals, breakdown, staffing, cost, defaultFrequency };
+  return { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries };
 }
 
 export function exportPdfEstimate(estimate: EstimateDraft) {
-  const { totals, breakdown, staffing, cost, defaultFrequency } =
+  const { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries } =
     getExportModel(estimate);
   const doc = new jsPDF({ unit: "pt", format: "letter" }) as AutoTableDocument;
   const title = facilityLabel(estimate.facility);
@@ -132,9 +140,10 @@ export function exportPdfEstimate(estimate: EstimateDraft) {
 
   autoTable(doc, {
     startY: (doc.lastAutoTable?.finalY ?? 400) + 20,
-    head: [["Room Log", "Minutes", "Cleaning Frequency"]],
+    head: [["Room Log", "Floor", "Minutes", "Cleaning Frequency"]],
     body: estimate.entries.map((entry) => [
       `${entry.roomType} #${entry.roomNumber}`,
+      getEntryFloor(entry),
       entry.minutes,
       entry.cleaningFrequency
         ? normalizeCleaningFrequency(entry.cleaningFrequency)
@@ -144,6 +153,20 @@ export function exportPdfEstimate(estimate: EstimateDraft) {
     headStyles: { fillColor: [15, 23, 22] },
   });
 
+  autoTable(doc, {
+    startY: (doc.lastAutoTable?.finalY ?? 500) + 20,
+    head: [["Floor", "Rooms", "Minutes", "Monthly Price", "Monthly Profit"]],
+    body: floorSummaries.map((floor) => [
+      `Floor ${floor.floorNumber}`,
+      floor.totals.totalRooms,
+      floor.totals.totalMinutes,
+      formatCurrency(floor.cost.recommendedMonthlyContract),
+      formatCurrency(floor.cost.grossMonthlyProfit),
+    ]),
+    theme: "grid",
+    headStyles: { fillColor: [25, 51, 42] },
+  });
+
   const fileName = `${fileBaseName(estimate) || "greenpoint-estimate"}.pdf`;
   downloadBlob(doc.output("blob"), fileName);
 
@@ -151,7 +174,7 @@ export function exportPdfEstimate(estimate: EstimateDraft) {
 }
 
 export function exportExcelEstimate(estimate: EstimateDraft) {
-  const { totals, breakdown, staffing, cost, defaultFrequency } =
+  const { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries } =
     getExportModel(estimate);
   const workbook = createExcelWorkbook([
     {
@@ -168,15 +191,43 @@ export function exportExcelEstimate(estimate: EstimateDraft) {
     {
       name: "Room Log",
       rows: [
-        ["Room", "Room Type", "Minutes", "Hours", "Cleaning Frequency"],
+        ["Room", "Floor", "Room Type", "Minutes", "Hours", "Cleaning Frequency"],
         ...estimate.entries.map((entry) => [
           `${entry.roomType} #${entry.roomNumber}`,
+          getEntryFloor(entry),
           entry.roomType,
           entry.minutes,
           entry.minutes / 60,
           entry.cleaningFrequency
             ? normalizeCleaningFrequency(entry.cleaningFrequency)
             : `Default: ${defaultFrequency}`,
+        ]),
+      ],
+    },
+    {
+      name: "Floors",
+      rows: [
+        [
+          "Floor",
+          "Rooms",
+          "Minutes",
+          "Hours",
+          "Weekly Labor Hours",
+          "Monthly Price",
+          "Annual Price",
+          "Monthly Profit",
+          "Annual Profit",
+        ],
+        ...floorSummaries.map((floor) => [
+          floor.floorNumber,
+          floor.totals.totalRooms,
+          floor.totals.totalMinutes,
+          floor.totals.totalHours,
+          floor.staffing.weeklyLaborHours,
+          floor.cost.recommendedMonthlyContract,
+          floor.cost.recommendedAnnualContract,
+          floor.cost.grossMonthlyProfit,
+          floor.cost.grossAnnualProfit,
         ]),
       ],
     },
@@ -299,7 +350,7 @@ function csvEscape(value: string | number) {
 }
 
 export function exportCsvEstimate(estimate: EstimateDraft) {
-  const { totals, breakdown, staffing, cost, defaultFrequency } =
+  const { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries } =
     getExportModel(estimate);
   const rows: Array<Array<string | number>> = [
     ["GreenPoint Walkthrough Estimator"],
@@ -329,10 +380,35 @@ export function exportCsvEstimate(estimate: EstimateDraft) {
       staffing.weeklyLaborHours,
     ],
     [],
+    ["Floor Summary"],
+    [
+      "Floor",
+      "Rooms",
+      "Minutes",
+      "Hours",
+      "Weekly Labor Hours",
+      "Monthly Price",
+      "Annual Price",
+      "Monthly Profit",
+      "Annual Profit",
+    ],
+    ...floorSummaries.map((floor) => [
+      floor.floorNumber,
+      floor.totals.totalRooms,
+      floor.totals.totalMinutes,
+      floor.totals.totalHours,
+      floor.staffing.weeklyLaborHours,
+      floor.cost.recommendedMonthlyContract,
+      floor.cost.recommendedAnnualContract,
+      floor.cost.grossMonthlyProfit,
+      floor.cost.grossAnnualProfit,
+    ]),
+    [],
     ["Room Log"],
-    ["Room", "Room Type", "Minutes", "Cleaning Frequency"],
+    ["Room", "Floor", "Room Type", "Minutes", "Cleaning Frequency"],
     ...estimate.entries.map((entry) => [
       `${entry.roomType} #${entry.roomNumber}`,
+      getEntryFloor(entry),
       entry.roomType,
       entry.minutes,
       entry.cleaningFrequency

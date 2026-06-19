@@ -13,6 +13,9 @@ class GreenPointDatabase extends Dexie {
     this.version(1).stores({
       estimates: "id, updatedAt",
     });
+    this.version(2).stores({
+      estimates: "id, updatedAt, savedAt",
+    });
   }
 }
 
@@ -33,6 +36,47 @@ export async function saveActiveEstimate(estimate: EstimateDraft) {
   }
 
   await database.estimates.put(estimate);
+}
+
+export async function listSavedEstimates() {
+  if (!database) {
+    return [];
+  }
+
+  const estimates = await database.estimates.where("savedAt").above("").toArray();
+
+  return estimates.sort((a, b) =>
+    String(b.savedAt ?? "").localeCompare(String(a.savedAt ?? "")),
+  );
+}
+
+export async function saveEstimateSnapshot(estimate: EstimateDraft) {
+  if (!database) {
+    return estimate;
+  }
+
+  const now = new Date().toISOString();
+  const savedEstimate: EstimateDraft = {
+    ...estimate,
+    id:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    savedAt: now,
+    updatedAt: now,
+  };
+
+  await database.estimates.put(savedEstimate);
+
+  return savedEstimate;
+}
+
+export async function deleteSavedEstimate(id: string) {
+  if (!database || id === ACTIVE_ESTIMATE_ID) {
+    return;
+  }
+
+  await database.estimates.delete(id);
 }
 
 export async function clearActiveEstimate() {

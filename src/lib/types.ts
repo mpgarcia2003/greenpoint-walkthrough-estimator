@@ -59,6 +59,7 @@ export interface RoomEntry {
   id: string;
   roomType: RoomType;
   roomNumber: number;
+  floorNumber: number;
   minutes: number;
   cleaningFrequency?: CleaningFrequency;
   createdAt: string;
@@ -77,8 +78,10 @@ export interface EstimateDraft {
   facility: FacilityInfo;
   entries: RoomEntry[];
   selectedRoomType: RoomType;
+  currentFloor: number;
   cleaningFrequency: CleaningFrequency;
   pricing: PricingInputs;
+  savedAt?: string;
   updatedAt: string;
 }
 
@@ -115,4 +118,11 @@ export interface CostSummary {
   recommendedAnnualContract: number;
   grossMonthlyProfit: number;
   grossAnnualProfit: number;
+}
+
+export interface FloorSummary {
+  floorNumber: number;
+  totals: EstimateTotals;
+  staffing: StaffingTotals;
+  cost: CostSummary;
 }
