@@ -1,5 +1,13 @@
-import { ACTIVE_ESTIMATE_ID, FREQUENCY_OPTIONS, ROOM_TYPES } from "@/lib/constants";
+import {
+  ACTIVE_ESTIMATE_ID,
+  DEFAULT_BUILDING_ID,
+  DEFAULT_BUILDINGS,
+  FREQUENCY_OPTIONS,
+  ROOM_TYPES,
+} from "@/lib/constants";
 import type {
+  BuildingInfo,
+  BuildingSummary,
   CleaningFrequency,
   CostSummary,
   EstimateDraft,
@@ -54,6 +62,33 @@ export function normalizeFloorNumber(floorNumber?: number) {
   return Math.round(floorNumber);
 }
 
+export function normalizeBuildingId(buildingId?: string) {
+  return buildingId?.trim() || DEFAULT_BUILDING_ID;
+}
+
+export function normalizeBuildings(
+  buildings?: BuildingInfo[],
+  fallbackFloors = 1,
+) {
+  const sourceBuildings = buildings?.length
+    ? buildings
+    : [
+        {
+          ...DEFAULT_BUILDINGS[0],
+          numberOfFloors: fallbackFloors,
+        },
+      ];
+  const normalized = sourceBuildings.map((building, index) => ({
+      id: normalizeBuildingId(building.id || `building-${index + 1}`),
+      name: building.name?.trim() || `Building ${index + 1}`,
+      numberOfFloors: normalizeFloorNumber(
+        building.numberOfFloors || fallbackFloors,
+      ),
+    }));
+
+  return normalized.length ? normalized : [...DEFAULT_BUILDINGS];
+}
+
 export function normalizeCleaningFrequency(
   frequency?: string,
 ): CleaningFrequency {
@@ -93,6 +128,7 @@ export function createRoomEntry(
   entries: RoomEntry[],
   roomType: RoomType,
   minutes: number,
+  buildingId = DEFAULT_BUILDING_ID,
   floorNumber = 1,
   cleaningFrequency?: CleaningFrequency,
 ): RoomEntry {
@@ -100,6 +136,7 @@ export function createRoomEntry(
 
   return {
     id: createId(),
+    buildingId: normalizeBuildingId(buildingId),
     roomType,
     roomNumber: getNextRoomNumber(entries, roomType),
     floorNumber: normalizeFloorNumber(floorNumber),
@@ -110,17 +147,38 @@ export function createRoomEntry(
   };
 }
 
+export function getEntryBuildingId(entry: RoomEntry) {
+  return normalizeBuildingId(entry.buildingId);
+}
+
 export function getEntryFloor(entry: RoomEntry) {
   return normalizeFloorNumber(entry.floorNumber);
 }
 
-export function getEntriesForFloor(entries: RoomEntry[], floorNumber: number) {
-  return entries.filter((entry) => getEntryFloor(entry) === floorNumber);
+export function getEntriesForBuilding(entries: RoomEntry[], buildingId: string) {
+  const normalizedBuildingId = normalizeBuildingId(buildingId);
+
+  return entries.filter(
+    (entry) => getEntryBuildingId(entry) === normalizedBuildingId,
+  );
+}
+
+export function getEntriesForFloor(
+  entries: RoomEntry[],
+  buildingId: string,
+  floorNumber: number,
+) {
+  return entries.filter(
+    (entry) =>
+      getEntryBuildingId(entry) === normalizeBuildingId(buildingId) &&
+      getEntryFloor(entry) === floorNumber,
+  );
 }
 
 export function getFloorNumbers(
   numberOfFloors: number,
   entries: RoomEntry[] = [],
+  buildingId = DEFAULT_BUILDING_ID,
 ) {
   const floorNumbers = new Set<number>();
   const facilityFloors = Math.max(1, normalizeFloorNumber(numberOfFloors));
@@ -129,33 +187,74 @@ export function getFloorNumbers(
     floorNumbers.add(floorNumber);
   }
 
-  entries.forEach((entry) => floorNumbers.add(getEntryFloor(entry)));
+  getEntriesForBuilding(entries, buildingId).forEach((entry) =>
+    floorNumbers.add(getEntryFloor(entry)),
+  );
 
   return Array.from(floorNumbers).sort((a, b) => a - b);
 }
 
 export function getFloorSummaries({
   entries,
-  numberOfFloors,
+  building,
   cleaningFrequency,
   pricing,
 }: {
   entries: RoomEntry[];
-  numberOfFloors: number;
+  building: BuildingInfo;
   cleaningFrequency: CleaningFrequency;
   pricing: PricingInputs;
 }): FloorSummary[] {
-  return getFloorNumbers(numberOfFloors, entries).map((floorNumber) => {
-    const floorEntries = getEntriesForFloor(entries, floorNumber);
+  return getFloorNumbers(
+    building.numberOfFloors,
+    entries,
+    building.id,
+  ).map((floorNumber) => {
+    const floorEntries = getEntriesForFloor(entries, building.id, floorNumber);
     const totals = getTotals(floorEntries);
     const staffing = getStaffingTotals(floorEntries, cleaningFrequency);
     const cost = getCostSummary(staffing, pricing);
 
     return {
+      buildingId: building.id,
+      buildingName: building.name,
       floorNumber,
       totals,
       staffing,
       cost,
+    };
+  });
+}
+
+export function getBuildingSummaries({
+  entries,
+  buildings,
+  cleaningFrequency,
+  pricing,
+}: {
+  entries: RoomEntry[];
+  buildings: BuildingInfo[];
+  cleaningFrequency: CleaningFrequency;
+  pricing: PricingInputs;
+}): BuildingSummary[] {
+  return buildings.map((building) => {
+    const buildingEntries = getEntriesForBuilding(entries, building.id);
+    const totals = getTotals(buildingEntries);
+    const staffing = getStaffingTotals(buildingEntries, cleaningFrequency);
+    const cost = getCostSummary(staffing, pricing);
+    const floorSummaries = getFloorSummaries({
+      entries,
+      building,
+      cleaningFrequency,
+      pricing,
+    });
+
+    return {
+      building,
+      totals,
+      staffing,
+      cost,
+      floorSummaries,
     };
   });
 }
@@ -243,6 +342,7 @@ export function updateRoomEntry(
   entries: RoomEntry[],
   id: string,
   updates: Pick<RoomEntry, "roomType" | "minutes"> & {
+    buildingId?: string;
     cleaningFrequency?: CleaningFrequency;
     floorNumber?: number;
   },
@@ -268,6 +368,7 @@ export function updateRoomEntry(
       roomNumber: roomTypeChanged
         ? getNextRoomNumber(remainingEntries, updates.roomType)
         : entry.roomNumber,
+      buildingId: normalizeBuildingId(updates.buildingId ?? entry.buildingId),
       minutes: updates.minutes,
       cleaningFrequency: updates.cleaningFrequency,
       floorNumber: normalizeFloorNumber(updates.floorNumber ?? entry.floorNumber),
@@ -278,8 +379,10 @@ export function updateRoomEntry(
 
 export function buildEstimateDraft({
   facility,
+  buildings,
   entries,
   selectedRoomType,
+  currentBuildingId,
   currentFloor,
   cleaningFrequency,
   pricing,
@@ -287,8 +390,10 @@ export function buildEstimateDraft({
   return {
     id: ACTIVE_ESTIMATE_ID,
     facility,
+    buildings,
     entries,
     selectedRoomType,
+    currentBuildingId,
     currentFloor,
     cleaningFrequency,
     pricing,

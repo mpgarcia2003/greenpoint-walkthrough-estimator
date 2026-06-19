@@ -1,4 +1,5 @@
 import type {
+  BuildingInfo,
   CleaningFrequency,
   FacilityInfo,
   FacilityType,
@@ -71,6 +72,16 @@ export const DEFAULT_FACILITY: FacilityInfo = {
   numberOfFloors: 1,
   facilityType: "School",
 };
+
+export const DEFAULT_BUILDING_ID = "main-building";
+
+export const DEFAULT_BUILDINGS: BuildingInfo[] = [
+  {
+    id: DEFAULT_BUILDING_ID,
+    name: "Main Building",
+    numberOfFloors: 1,
+  },
+];
 
 export const DEFAULT_PRICING: PricingInputs = {
   hourlyWage: 22,

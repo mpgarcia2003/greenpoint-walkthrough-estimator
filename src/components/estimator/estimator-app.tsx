@@ -51,7 +51,10 @@ import {
   facilityLabel,
   formatCurrency,
   formatNumber,
+  getBuildingSummaries,
+  getEntriesForBuilding,
   getEntriesForFloor,
+  getEntryBuildingId,
   getEntryFloor,
   getCostSummary,
   getFloorNumbers,
@@ -59,11 +62,15 @@ import {
   getRoomBreakdown,
   getStaffingTotals,
   getTotals,
+  normalizeBuildingId,
+  normalizeBuildings,
   normalizeCleaningFrequency,
   normalizeFloorNumber,
   updateRoomEntry,
 } from "@/lib/calculations";
 import {
+  DEFAULT_BUILDING_ID,
+  DEFAULT_BUILDINGS,
   DEFAULT_FACILITY,
   DEFAULT_PRICING,
   FACILITY_TYPES,
@@ -87,6 +94,7 @@ import {
   saveEstimateSnapshot,
 } from "@/lib/storage";
 import type {
+  BuildingInfo,
   CleaningFrequency,
   EstimateDraft,
   FacilityInfo,
@@ -112,6 +120,7 @@ type EstimatorAppProps = {
 
 type EditingEntry = {
   id: string;
+  buildingId: string;
   roomType: RoomType;
   minutes: number;
   floorNumber: number;
@@ -129,8 +138,29 @@ const roomAccentClasses = [
 function normalizeEntries(entries: RoomEntry[]) {
   return entries.map((entry) => ({
     ...entry,
+    buildingId: normalizeBuildingId(entry.buildingId),
     floorNumber: normalizeFloorNumber(entry.floorNumber),
   }));
+}
+
+function createBuildingId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `building-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getDefaultBuildings(numberOfFloors = 1) {
+  return normalizeBuildings(
+    [
+      {
+        ...DEFAULT_BUILDINGS[0],
+        numberOfFloors,
+      },
+    ],
+    numberOfFloors,
+  );
 }
 
 export function EstimatorApp({
@@ -143,8 +173,13 @@ export function EstimatorApp({
 }: EstimatorAppProps) {
   const [step, setStep] = useState<AppStep>("facility");
   const [facility, setFacility] = useState<FacilityInfo>({ ...DEFAULT_FACILITY });
+  const [buildings, setBuildings] = useState<BuildingInfo[]>(
+    getDefaultBuildings(DEFAULT_FACILITY.numberOfFloors),
+  );
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [selectedRoomType, setSelectedRoomType] = useState<RoomType>("Classroom");
+  const [currentBuildingId, setCurrentBuildingId] =
+    useState(DEFAULT_BUILDING_ID);
   const [currentFloor, setCurrentFloor] = useState(1);
   const [cleaningFrequency, setCleaningFrequency] =
     useState<CleaningFrequency>("5 days/week");
@@ -171,19 +206,38 @@ export function EstimatorApp({
   );
 
   const totals = useMemo(() => getTotals(entries), [entries]);
+  const activeBuilding = useMemo(
+    () =>
+      buildings.find((building) => building.id === currentBuildingId) ??
+      buildings[0] ??
+      getDefaultBuildings(facility.numberOfFloors)[0],
+    [buildings, currentBuildingId, facility.numberOfFloors],
+  );
+  const activeBuildingEntries = useMemo(
+    () => getEntriesForBuilding(entries, activeBuilding.id),
+    [activeBuilding.id, entries],
+  );
+  const activeBuildingTotals = useMemo(
+    () => getTotals(activeBuildingEntries),
+    [activeBuildingEntries],
+  );
   const floorNumbers = useMemo(
     () =>
       Array.from(
         new Set([
-          ...getFloorNumbers(facility.numberOfFloors, entries),
+          ...getFloorNumbers(
+            activeBuilding.numberOfFloors,
+            entries,
+            activeBuilding.id,
+          ),
           currentFloor,
         ]),
       ).sort((a, b) => a - b),
-    [currentFloor, entries, facility.numberOfFloors],
+    [activeBuilding.id, activeBuilding.numberOfFloors, currentFloor, entries],
   );
   const currentFloorEntries = useMemo(
-    () => getEntriesForFloor(entries, currentFloor),
-    [currentFloor, entries],
+    () => getEntriesForFloor(entries, activeBuilding.id, currentFloor),
+    [activeBuilding.id, currentFloor, entries],
   );
   const currentFloorTotals = useMemo(
     () => getTotals(currentFloorEntries),
@@ -205,23 +259,44 @@ export function EstimatorApp({
     () =>
       getFloorSummaries({
         entries,
-        numberOfFloors: facility.numberOfFloors,
+        building: activeBuilding,
         cleaningFrequency,
         pricing,
       }),
-    [cleaningFrequency, entries, facility.numberOfFloors, pricing],
+    [activeBuilding, cleaningFrequency, entries, pricing],
+  );
+  const buildingSummaries = useMemo(
+    () =>
+      getBuildingSummaries({
+        entries,
+        buildings,
+        cleaningFrequency,
+        pricing,
+      }),
+    [buildings, cleaningFrequency, entries, pricing],
   );
   const estimateDraft = useMemo(
     () =>
       buildEstimateDraft({
         facility,
+        buildings,
         entries,
         selectedRoomType,
+        currentBuildingId: activeBuilding.id,
         currentFloor,
         cleaningFrequency,
         pricing,
       }),
-    [cleaningFrequency, currentFloor, entries, facility, pricing, selectedRoomType],
+    [
+      activeBuilding.id,
+      buildings,
+      cleaningFrequency,
+      currentFloor,
+      entries,
+      facility,
+      pricing,
+      selectedRoomType,
+    ],
   );
 
   useEffect(() => {
@@ -238,9 +313,24 @@ export function EstimatorApp({
       }
 
       if (savedDraft) {
-        setFacility({ ...DEFAULT_FACILITY, ...savedDraft.facility });
+        const nextFacility = { ...DEFAULT_FACILITY, ...savedDraft.facility };
+        const nextBuildings = normalizeBuildings(
+          savedDraft.buildings,
+          nextFacility.numberOfFloors,
+        );
+        const nextBuildingId = normalizeBuildingId(
+          savedDraft.currentBuildingId ?? nextBuildings[0]?.id,
+        );
+
+        setFacility(nextFacility);
+        setBuildings(nextBuildings);
         setEntries(normalizeEntries(savedDraft.entries ?? []));
         setSelectedRoomType(savedDraft.selectedRoomType ?? "Classroom");
+        setCurrentBuildingId(
+          nextBuildings.some((building) => building.id === nextBuildingId)
+            ? nextBuildingId
+            : nextBuildings[0]?.id ?? DEFAULT_BUILDING_ID,
+        );
         setCurrentFloor(normalizeFloorNumber(savedDraft.currentFloor));
         setCleaningFrequency(
           normalizeCleaningFrequency(savedDraft.cleaningFrequency),
@@ -335,6 +425,7 @@ export function EstimatorApp({
             nextEntries,
             selectedRoomType,
             Math.round(minutes),
+            activeBuilding.id,
             currentFloor,
           ),
         );
@@ -359,6 +450,7 @@ export function EstimatorApp({
     setEntries((currentEntries) =>
       updateRoomEntry(currentEntries, editingEntry.id, {
         roomType: editingEntry.roomType,
+        buildingId: editingEntry.buildingId,
         minutes: editingEntry.minutes,
         floorNumber: editingEntry.floorNumber,
         cleaningFrequency: editingEntry.cleaningFrequency,
@@ -369,8 +461,10 @@ export function EstimatorApp({
 
   async function startNewEstimate() {
     setFacility({ ...DEFAULT_FACILITY });
+    setBuildings(getDefaultBuildings(DEFAULT_FACILITY.numberOfFloors));
     setEntries([]);
     setSelectedRoomType("Classroom");
+    setCurrentBuildingId(DEFAULT_BUILDING_ID);
     setCurrentFloor(1);
     setCleaningFrequency("5 days/week");
     setPricing({ ...DEFAULT_PRICING });
@@ -381,12 +475,54 @@ export function EstimatorApp({
   }
 
   function addFloor() {
-    const nextFloor = normalizeFloorNumber(facility.numberOfFloors) + 1;
-    setFacility((current) => ({
-      ...current,
-      numberOfFloors: nextFloor,
-    }));
+    const nextFloor = normalizeFloorNumber(activeBuilding.numberOfFloors) + 1;
+    setBuildings((currentBuildings) =>
+      currentBuildings.map((building) =>
+        building.id === activeBuilding.id
+          ? { ...building, numberOfFloors: nextFloor }
+          : building,
+      ),
+    );
     setCurrentFloor(nextFloor);
+  }
+
+  function addBuilding() {
+    const buildingNumber = buildings.length + 1;
+    const nextBuilding: BuildingInfo = {
+      id: createBuildingId(),
+      name: `Building ${buildingNumber}`,
+      numberOfFloors: 1,
+    };
+
+    setBuildings((currentBuildings) => [...currentBuildings, nextBuilding]);
+    setCurrentBuildingId(nextBuilding.id);
+    setCurrentFloor(1);
+    setEditingEntry(null);
+  }
+
+  function selectBuilding(buildingId: string) {
+    setCurrentBuildingId(buildingId);
+    setCurrentFloor(1);
+    setEditingEntry(null);
+  }
+
+  function renameBuilding(buildingId: string, name: string) {
+    setBuildings((currentBuildings) =>
+      currentBuildings.map((building) =>
+        building.id === buildingId ? { ...building, name } : building,
+      ),
+    );
+  }
+
+  function startWalkthrough() {
+    if (entries.length === 0 && buildings.length === 1) {
+      const nextBuildings = getDefaultBuildings(facility.numberOfFloors);
+      setBuildings(nextBuildings);
+      setCurrentBuildingId(nextBuildings[0]?.id ?? DEFAULT_BUILDING_ID);
+      setCurrentFloor(1);
+    }
+
+    setStep("walkthrough");
   }
 
   async function refreshSavedHistory() {
@@ -426,16 +562,31 @@ export function EstimatorApp({
   }
 
   async function reopenSavedWalkthrough(estimate: EstimateDraft) {
+    const nextBuildings = normalizeBuildings(
+      estimate.buildings,
+      estimate.facility.numberOfFloors,
+    );
+    const nextBuildingId = normalizeBuildingId(
+      estimate.currentBuildingId ?? nextBuildings[0]?.id,
+    );
     const normalizedEstimate: EstimateDraft = {
       ...estimate,
+      buildings: nextBuildings,
       entries: normalizeEntries(estimate.entries),
+      currentBuildingId: nextBuildings.some(
+        (building) => building.id === nextBuildingId,
+      )
+        ? nextBuildingId
+        : nextBuildings[0]?.id ?? DEFAULT_BUILDING_ID,
       currentFloor: normalizeFloorNumber(estimate.currentFloor),
       cleaningFrequency: normalizeCleaningFrequency(estimate.cleaningFrequency),
     };
 
     setFacility({ ...DEFAULT_FACILITY, ...normalizedEstimate.facility });
+    setBuildings(normalizedEstimate.buildings);
     setEntries(normalizedEstimate.entries);
     setSelectedRoomType(normalizedEstimate.selectedRoomType ?? "Classroom");
+    setCurrentBuildingId(normalizedEstimate.currentBuildingId);
     setCurrentFloor(normalizedEstimate.currentFloor);
     setCleaningFrequency(normalizedEstimate.cleaningFrequency);
     setPricing({ ...DEFAULT_PRICING, ...normalizedEstimate.pricing });
@@ -496,7 +647,7 @@ export function EstimatorApp({
         userEmail={userEmail}
         onChangeOrganization={onChangeOrganization}
         onSignOut={onSignOut}
-        onStart={() => setStep("walkthrough")}
+        onStart={startWalkthrough}
         onUpdateFacility={updateFacility}
       />
     );
@@ -517,12 +668,19 @@ export function EstimatorApp({
       />
 
       <main className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-3 py-4 sm:px-5 lg:px-6">
-        <FloorWorkflowPanel
+        <BuildingWorkflowPanel
+          activeBuilding={activeBuilding}
+          activeBuildingTotals={activeBuildingTotals}
+          buildings={buildings}
+          buildingSummaries={buildingSummaries}
           currentFloor={currentFloor}
           currentFloorTotals={currentFloorTotals}
           floorNumbers={floorNumbers}
           floorSummaries={floorSummaries}
+          onAddBuilding={addBuilding}
           onAddFloor={addFloor}
+          onRenameBuilding={renameBuilding}
+          onSelectBuilding={selectBuilding}
           onSelectFloor={setCurrentFloor}
         />
 
@@ -541,12 +699,16 @@ export function EstimatorApp({
             entries={currentFloorEntries}
             editingEntry={editingEntry}
             defaultFrequency={cleaningFrequency}
+            activeBuilding={activeBuilding}
+            buildings={buildings}
             currentFloor={currentFloor}
             floorNumbers={floorNumbers}
+            allEntries={entries}
             logEndRef={logEndRef}
             onStartEdit={(entry) =>
               setEditingEntry({
                 id: entry.id,
+                buildingId: getEntryBuildingId(entry),
                 roomType: entry.roomType,
                 minutes: entry.minutes,
                 floorNumber: getEntryFloor(entry),
@@ -1190,27 +1352,89 @@ function MinuteKeyboard({
   );
 }
 
-function FloorWorkflowPanel({
+function BuildingWorkflowPanel({
+  activeBuilding,
+  activeBuildingTotals,
+  buildings,
+  buildingSummaries,
   currentFloor,
   currentFloorTotals,
   floorNumbers,
   floorSummaries,
+  onAddBuilding,
   onAddFloor,
+  onRenameBuilding,
+  onSelectBuilding,
   onSelectFloor,
 }: {
+  activeBuilding: BuildingInfo;
+  activeBuildingTotals: ReturnType<typeof getTotals>;
+  buildings: BuildingInfo[];
+  buildingSummaries: ReturnType<typeof getBuildingSummaries>;
   currentFloor: number;
   currentFloorTotals: ReturnType<typeof getTotals>;
   floorNumbers: number[];
   floorSummaries: ReturnType<typeof getFloorSummaries>;
+  onAddBuilding: () => void;
   onAddFloor: () => void;
+  onRenameBuilding: (buildingId: string, name: string) => void;
+  onSelectBuilding: (buildingId: string) => void;
   onSelectFloor: (floorNumber: number) => void;
 }) {
   return (
     <Card className="bg-[#101816]">
       <CardHeader>
-        <CardTitle>Floor Workflow</CardTitle>
+        <CardTitle>Building & Floor Workflow</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4">
+        <div className="grid gap-2">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {buildings.map((building) => {
+              const selected = activeBuilding.id === building.id;
+
+              return (
+                <button
+                  key={building.id}
+                  type="button"
+                  onClick={() => onSelectBuilding(building.id)}
+                  className={cn(
+                    "min-h-12 shrink-0 rounded-md border px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    selected
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-[#0b1311] text-foreground hover:border-primary",
+                  )}
+                >
+                  {building.name}
+                </button>
+              );
+            })}
+            <Button
+              className="h-12 shrink-0"
+              variant="secondary"
+              onClick={onAddBuilding}
+            >
+              <Plus className="size-4" />
+              Add Building
+            </Button>
+          </div>
+
+          <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-end">
+            <div className="grid gap-2">
+              <Label htmlFor="active-building-name">Active Building Name</Label>
+              <Input
+                id="active-building-name"
+                value={activeBuilding.name}
+                onChange={(event) =>
+                  onRenameBuilding(activeBuilding.id, event.target.value)
+                }
+              />
+            </div>
+            <Badge className="h-12 justify-center border-[#31453d] bg-[#0b1311] text-[#cfe5d8]">
+              {formatNumber(activeBuildingTotals.totalRooms, 0)} rooms in building
+            </Badge>
+          </div>
+        </div>
+
         <div className="flex gap-2 overflow-x-auto pb-1">
           {floorNumbers.map((floorNumber) => {
             const selected = currentFloor === floorNumber;
@@ -1237,7 +1461,11 @@ function FloorWorkflowPanel({
           </Button>
         </div>
 
-        <div className="grid gap-2 md:grid-cols-4">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+          <SummaryLine
+            label={`${activeBuilding.name} Rooms`}
+            value={formatNumber(activeBuildingTotals.totalRooms, 0)}
+          />
           <SummaryLine
             label={`Floor ${currentFloor} Rooms`}
             value={formatNumber(currentFloorTotals.totalRooms, 0)}
@@ -1252,15 +1480,52 @@ function FloorWorkflowPanel({
           />
           <SummaryLine
             label="Active Floor"
-            value={`Floor ${currentFloor}`}
+            value={`${activeBuilding.name} / Floor ${currentFloor}`}
             emphasis
           />
         </div>
 
         <div className="grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
+          {buildingSummaries.map((summary) => (
+            <div
+              key={summary.building.id}
+              className={cn(
+                "rounded-md border bg-[#0b1311] p-3",
+                activeBuilding.id === summary.building.id
+                  ? "border-primary/70"
+                  : "border-border",
+              )}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-semibold text-foreground">
+                  {summary.building.name}
+                </p>
+                <Badge className="border-[#31453d] bg-[#101816]">
+                  {summary.totals.totalRooms} rooms
+                </Badge>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <p className="text-muted-foreground">Minutes</p>
+                <p className="text-right font-semibold">
+                  {formatNumber(summary.totals.totalMinutes, 0)}
+                </p>
+                <p className="text-muted-foreground">Monthly Price</p>
+                <p className="text-right font-semibold">
+                  {formatCurrency(summary.cost.recommendedMonthlyContract)}
+                </p>
+                <p className="text-muted-foreground">Monthly Profit</p>
+                <p className="text-right font-semibold text-primary">
+                  {formatCurrency(summary.cost.grossMonthlyProfit)}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-2 lg:grid-cols-2 xl:grid-cols-3">
           {floorSummaries.map((floor) => (
             <div
-              key={floor.floorNumber}
+              key={`${floor.buildingId}-${floor.floorNumber}`}
               className={cn(
                 "rounded-md border bg-[#0b1311] p-3",
                 currentFloor === floor.floorNumber
@@ -1270,7 +1535,7 @@ function FloorWorkflowPanel({
             >
               <div className="flex items-center justify-between gap-3">
                 <p className="font-semibold text-foreground">
-                  Floor {floor.floorNumber}
+                  {floor.buildingName} / Floor {floor.floorNumber}
                 </p>
                 <Badge className="border-[#31453d] bg-[#101816]">
                   {floor.totals.totalRooms} rooms
@@ -1302,8 +1567,11 @@ function RoomLogPanel({
   entries,
   editingEntry,
   defaultFrequency,
+  activeBuilding,
+  buildings,
   currentFloor,
   floorNumbers,
+  allEntries,
   logEndRef,
   onStartEdit,
   onCancelEdit,
@@ -1314,8 +1582,11 @@ function RoomLogPanel({
   entries: RoomEntry[];
   editingEntry: EditingEntry | null;
   defaultFrequency: CleaningFrequency;
+  activeBuilding: BuildingInfo;
+  buildings: BuildingInfo[];
   currentFloor: number;
   floorNumbers: number[];
+  allEntries: RoomEntry[];
   logEndRef: RefObject<HTMLDivElement | null>;
   onStartEdit: (entry: RoomEntry) => void;
   onCancelEdit: () => void;
@@ -1326,7 +1597,9 @@ function RoomLogPanel({
   return (
     <Card className="bg-[#101816] xl:min-h-[520px]">
       <CardHeader>
-        <CardTitle>Floor {currentFloor} Room Log</CardTitle>
+        <CardTitle>
+          {activeBuilding.name} / Floor {currentFloor} Room Log
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <div className="max-h-[520px] overflow-y-auto pr-1">
@@ -1338,6 +1611,24 @@ function RoomLogPanel({
             <div className="grid gap-2">
               {entries.map((entry) => {
                 const isEditing = editingEntry?.id === entry.id;
+                const entryBuilding =
+                  buildings.find(
+                    (building) => building.id === getEntryBuildingId(entry),
+                  ) ?? activeBuilding;
+                const editingBuilding =
+                  editingEntry && isEditing
+                    ? buildings.find(
+                        (building) => building.id === editingEntry.buildingId,
+                      ) ?? activeBuilding
+                    : activeBuilding;
+                const editingFloorNumbers =
+                  editingEntry && isEditing
+                    ? getFloorNumbers(
+                        editingBuilding.numberOfFloors,
+                        allEntries,
+                        editingBuilding.id,
+                      )
+                    : floorNumbers;
 
                 return (
                   <div
@@ -1351,6 +1642,7 @@ function RoomLogPanel({
                         </p>
                         <p className="text-sm text-muted-foreground">
                           {entry.minutes} min -{" "}
+                          {entryBuilding.name} -{" "}
                           Floor {getEntryFloor(entry)} -{" "}
                           {entry.cleaningFrequency
                             ? normalizeCleaningFrequency(entry.cleaningFrequency)
@@ -1473,6 +1765,38 @@ function RoomLogPanel({
                         </div>
 
                         <div className="grid gap-2">
+                          <Label>Building</Label>
+                          <Select
+                            value={editingEntry.buildingId}
+                            onValueChange={(value) => {
+                              const nextBuilding =
+                                buildings.find((building) => building.id === value) ??
+                                activeBuilding;
+
+                              onChangeEdit({
+                                ...editingEntry,
+                                buildingId: value,
+                                floorNumber: Math.min(
+                                  editingEntry.floorNumber,
+                                  normalizeFloorNumber(nextBuilding.numberOfFloors),
+                                ),
+                              });
+                            }}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {buildings.map((building) => (
+                                <SelectItem key={building.id} value={building.id}>
+                                  {building.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="grid gap-2">
                           <Label>Floor</Label>
                           <Select
                             value={String(editingEntry.floorNumber)}
@@ -1487,7 +1811,7 @@ function RoomLogPanel({
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {floorNumbers.map((floorNumber) => (
+                              {editingFloorNumbers.map((floorNumber) => (
                                 <SelectItem
                                   key={floorNumber}
                                   value={String(floorNumber)}

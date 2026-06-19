@@ -57,6 +57,7 @@ export interface FacilityInfo {
 
 export interface RoomEntry {
   id: string;
+  buildingId: string;
   roomType: RoomType;
   roomNumber: number;
   floorNumber: number;
@@ -64,6 +65,12 @@ export interface RoomEntry {
   cleaningFrequency?: CleaningFrequency;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BuildingInfo {
+  id: string;
+  name: string;
+  numberOfFloors: number;
 }
 
 export interface PricingInputs {
@@ -76,8 +83,10 @@ export interface PricingInputs {
 export interface EstimateDraft {
   id: string;
   facility: FacilityInfo;
+  buildings: BuildingInfo[];
   entries: RoomEntry[];
   selectedRoomType: RoomType;
+  currentBuildingId: string;
   currentFloor: number;
   cleaningFrequency: CleaningFrequency;
   pricing: PricingInputs;
@@ -127,8 +136,18 @@ export interface OrganizationSummary {
 }
 
 export interface FloorSummary {
+  buildingId: string;
+  buildingName: string;
   floorNumber: number;
   totals: EstimateTotals;
   staffing: StaffingTotals;
   cost: CostSummary;
+}
+
+export interface BuildingSummary {
+  building: BuildingInfo;
+  totals: EstimateTotals;
+  staffing: StaffingTotals;
+  cost: CostSummary;
+  floorSummaries: FloorSummary[];
 }

@@ -7,12 +7,14 @@ import {
   facilityLabel,
   formatCurrency,
   formatNumber,
+  getBuildingSummaries,
+  getEntryBuildingId,
   getCostSummary,
   getEntryFloor,
-  getFloorSummaries,
   getRoomBreakdown,
   getStaffingTotals,
   getTotals,
+  normalizeBuildings,
   normalizeCleaningFrequency,
 } from "@/lib/calculations";
 import type { EstimateDraft } from "@/lib/types";
@@ -38,19 +40,42 @@ function getExportModel(estimate: EstimateDraft) {
   const breakdown = getRoomBreakdown(estimate.entries, defaultFrequency);
   const staffing = getStaffingTotals(estimate.entries, defaultFrequency);
   const cost = getCostSummary(staffing, estimate.pricing);
-  const floorSummaries = getFloorSummaries({
+  const buildings = normalizeBuildings(
+    estimate.buildings,
+    estimate.facility.numberOfFloors,
+  );
+  const buildingSummaries = getBuildingSummaries({
     entries: estimate.entries,
-    numberOfFloors: estimate.facility.numberOfFloors,
+    buildings,
     cleaningFrequency: defaultFrequency,
     pricing: estimate.pricing,
   });
+  const floorSummaries = buildingSummaries.flatMap(
+    (building) => building.floorSummaries,
+  );
 
-  return { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries };
+  return {
+    totals,
+    breakdown,
+    staffing,
+    cost,
+    defaultFrequency,
+    buildings,
+    buildingSummaries,
+    floorSummaries,
+  };
 }
 
 function createPdfEstimateDocument(estimate: EstimateDraft) {
-  const { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries } =
-    getExportModel(estimate);
+  const {
+    totals,
+    breakdown,
+    staffing,
+    cost,
+    defaultFrequency,
+    buildingSummaries,
+    floorSummaries,
+  } = getExportModel(estimate);
   const doc = new jsPDF({ unit: "pt", format: "letter" }) as AutoTableDocument;
   const title = facilityLabel(estimate.facility);
 
@@ -71,6 +96,7 @@ function createPdfEstimateDocument(estimate: EstimateDraft) {
       ["Address", estimate.facility.address || "Not specified"],
       ["Square Footage", formatNumber(estimate.facility.squareFootage, 0)],
       ["Number of Floors", formatNumber(estimate.facility.numberOfFloors, 0)],
+      ["Buildings", formatNumber(buildingSummaries.length, 0)],
       ["Facility Type", estimate.facility.facilityType],
     ],
     theme: "grid",
@@ -140,9 +166,12 @@ function createPdfEstimateDocument(estimate: EstimateDraft) {
 
   autoTable(doc, {
     startY: (doc.lastAutoTable?.finalY ?? 400) + 20,
-    head: [["Room Log", "Floor", "Minutes", "Cleaning Frequency"]],
+    head: [["Room Log", "Building", "Floor", "Minutes", "Cleaning Frequency"]],
     body: estimate.entries.map((entry) => [
       `${entry.roomType} #${entry.roomNumber}`,
+      buildingSummaries.find(
+        (summary) => summary.building.id === getEntryBuildingId(entry),
+      )?.building.name ?? "Main Building",
       getEntryFloor(entry),
       entry.minutes,
       entry.cleaningFrequency
@@ -155,13 +184,27 @@ function createPdfEstimateDocument(estimate: EstimateDraft) {
 
   autoTable(doc, {
     startY: (doc.lastAutoTable?.finalY ?? 500) + 20,
-    head: [["Floor", "Rooms", "Minutes", "Monthly Price", "Monthly Profit"]],
+    head: [["Building", "Rooms", "Minutes", "Monthly Price", "Monthly Profit"]],
+    body: buildingSummaries.map((summary) => [
+      summary.building.name,
+      summary.totals.totalRooms,
+      summary.totals.totalMinutes,
+      formatCurrency(summary.cost.recommendedMonthlyContract),
+      formatCurrency(summary.cost.grossMonthlyProfit),
+    ]),
+    theme: "grid",
+    headStyles: { fillColor: [25, 51, 42] },
+  });
+
+  autoTable(doc, {
+    startY: (doc.lastAutoTable?.finalY ?? 560) + 20,
+    head: [["Building", "Floor", "Rooms", "Minutes", "Monthly Price"]],
     body: floorSummaries.map((floor) => [
+      floor.buildingName,
       `Floor ${floor.floorNumber}`,
       floor.totals.totalRooms,
       floor.totals.totalMinutes,
       formatCurrency(floor.cost.recommendedMonthlyContract),
-      formatCurrency(floor.cost.grossMonthlyProfit),
     ]),
     theme: "grid",
     headStyles: { fillColor: [25, 51, 42] },
@@ -186,8 +229,15 @@ export function exportPdfEstimate(estimate: EstimateDraft) {
 }
 
 export function exportExcelEstimate(estimate: EstimateDraft) {
-  const { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries } =
-    getExportModel(estimate);
+  const {
+    totals,
+    breakdown,
+    staffing,
+    cost,
+    defaultFrequency,
+    buildingSummaries,
+    floorSummaries,
+  } = getExportModel(estimate);
   const workbook = createExcelWorkbook([
     {
       name: "Facility",
@@ -197,15 +247,56 @@ export function exportExcelEstimate(estimate: EstimateDraft) {
         ["Address", estimate.facility.address],
         ["Square Footage", estimate.facility.squareFootage],
         ["Number of Floors", estimate.facility.numberOfFloors],
+        ["Buildings", buildingSummaries.length],
         ["Facility Type", estimate.facility.facilityType],
+      ],
+    },
+    {
+      name: "Buildings",
+      rows: [
+        [
+          "Building",
+          "Floors",
+          "Rooms",
+          "Minutes",
+          "Hours",
+          "Weekly Labor Hours",
+          "Monthly Price",
+          "Annual Price",
+          "Monthly Profit",
+          "Annual Profit",
+        ],
+        ...buildingSummaries.map((summary) => [
+          summary.building.name,
+          summary.building.numberOfFloors,
+          summary.totals.totalRooms,
+          summary.totals.totalMinutes,
+          summary.totals.totalHours,
+          summary.staffing.weeklyLaborHours,
+          summary.cost.recommendedMonthlyContract,
+          summary.cost.recommendedAnnualContract,
+          summary.cost.grossMonthlyProfit,
+          summary.cost.grossAnnualProfit,
+        ]),
       ],
     },
     {
       name: "Room Log",
       rows: [
-        ["Room", "Floor", "Room Type", "Minutes", "Hours", "Cleaning Frequency"],
+        [
+          "Room",
+          "Building",
+          "Floor",
+          "Room Type",
+          "Minutes",
+          "Hours",
+          "Cleaning Frequency",
+        ],
         ...estimate.entries.map((entry) => [
           `${entry.roomType} #${entry.roomNumber}`,
+          buildingSummaries.find(
+            (summary) => summary.building.id === getEntryBuildingId(entry),
+          )?.building.name ?? "Main Building",
           getEntryFloor(entry),
           entry.roomType,
           entry.minutes,
@@ -220,6 +311,7 @@ export function exportExcelEstimate(estimate: EstimateDraft) {
       name: "Floors",
       rows: [
         [
+          "Building",
           "Floor",
           "Rooms",
           "Minutes",
@@ -231,6 +323,7 @@ export function exportExcelEstimate(estimate: EstimateDraft) {
           "Annual Profit",
         ],
         ...floorSummaries.map((floor) => [
+          floor.buildingName,
           floor.floorNumber,
           floor.totals.totalRooms,
           floor.totals.totalMinutes,
@@ -362,8 +455,15 @@ function csvEscape(value: string | number) {
 }
 
 export function exportCsvEstimate(estimate: EstimateDraft) {
-  const { totals, breakdown, staffing, cost, defaultFrequency, floorSummaries } =
-    getExportModel(estimate);
+  const {
+    totals,
+    breakdown,
+    staffing,
+    cost,
+    defaultFrequency,
+    buildingSummaries,
+    floorSummaries,
+  } = getExportModel(estimate);
   const rows: Array<Array<string | number>> = [
     ["GreenPoint Walkthrough Estimator"],
     [],
@@ -373,7 +473,34 @@ export function exportCsvEstimate(estimate: EstimateDraft) {
     ["Address", estimate.facility.address],
     ["Square Footage", estimate.facility.squareFootage],
     ["Number of Floors", estimate.facility.numberOfFloors],
+    ["Buildings", buildingSummaries.length],
     ["Facility Type", estimate.facility.facilityType],
+    [],
+    ["Building Summary"],
+    [
+      "Building",
+      "Floors",
+      "Rooms",
+      "Minutes",
+      "Hours",
+      "Weekly Labor Hours",
+      "Monthly Price",
+      "Annual Price",
+      "Monthly Profit",
+      "Annual Profit",
+    ],
+    ...buildingSummaries.map((summary) => [
+      summary.building.name,
+      summary.building.numberOfFloors,
+      summary.totals.totalRooms,
+      summary.totals.totalMinutes,
+      summary.totals.totalHours,
+      summary.staffing.weeklyLaborHours,
+      summary.cost.recommendedMonthlyContract,
+      summary.cost.recommendedAnnualContract,
+      summary.cost.grossMonthlyProfit,
+      summary.cost.grossAnnualProfit,
+    ]),
     [],
     ["Room Breakdown"],
     ["Room Type", "Rooms", "Minutes", "Hours", "Weekly Hours"],
@@ -394,6 +521,7 @@ export function exportCsvEstimate(estimate: EstimateDraft) {
     [],
     ["Floor Summary"],
     [
+      "Building",
       "Floor",
       "Rooms",
       "Minutes",
@@ -405,6 +533,7 @@ export function exportCsvEstimate(estimate: EstimateDraft) {
       "Annual Profit",
     ],
     ...floorSummaries.map((floor) => [
+      floor.buildingName,
       floor.floorNumber,
       floor.totals.totalRooms,
       floor.totals.totalMinutes,
@@ -417,9 +546,12 @@ export function exportCsvEstimate(estimate: EstimateDraft) {
     ]),
     [],
     ["Room Log"],
-    ["Room", "Floor", "Room Type", "Minutes", "Cleaning Frequency"],
+    ["Room", "Building", "Floor", "Room Type", "Minutes", "Cleaning Frequency"],
     ...estimate.entries.map((entry) => [
       `${entry.roomType} #${entry.roomNumber}`,
+      buildingSummaries.find(
+        (summary) => summary.building.id === getEntryBuildingId(entry),
+      )?.building.name ?? "Main Building",
       getEntryFloor(entry),
       entry.roomType,
       entry.minutes,
