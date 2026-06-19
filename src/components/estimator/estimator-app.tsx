@@ -19,8 +19,10 @@ import {
   Plus,
   Play,
   QrCode,
+  RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Sparkles,
   Trash2,
   X,
@@ -106,7 +108,7 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-type AppStep = "facility" | "walkthrough";
+type AppStep = "dashboard" | "facility" | "walkthrough";
 type HistoryMode = "cloud" | "local";
 
 type EstimatorAppProps = {
@@ -171,7 +173,7 @@ export function EstimatorApp({
   onChangeOrganization,
   onSignOut,
 }: EstimatorAppProps) {
-  const [step, setStep] = useState<AppStep>("facility");
+  const [step, setStep] = useState<AppStep>("dashboard");
   const [facility, setFacility] = useState<FacilityInfo>({ ...DEFAULT_FACILITY });
   const [buildings, setBuildings] = useState<BuildingInfo[]>(
     getDefaultBuildings(DEFAULT_FACILITY.numberOfFloors),
@@ -336,7 +338,6 @@ export function EstimatorApp({
           normalizeCleaningFrequency(savedDraft.cleaningFrequency),
         );
         setPricing({ ...DEFAULT_PRICING, ...savedDraft.pricing });
-        setStep(savedDraft.entries?.length ? "walkthrough" : "facility");
       }
 
       try {
@@ -525,6 +526,23 @@ export function EstimatorApp({
     setStep("walkthrough");
   }
 
+  async function refreshDashboard() {
+    try {
+      await refreshSavedHistory();
+      setHistoryStatus({
+        tone: "success",
+        message: `Dashboard refreshed from ${
+          historyMode === "cloud" ? "cloud storage" : "local history"
+        }.`,
+      });
+    } catch {
+      setHistoryStatus({
+        tone: "error",
+        message: "Could not refresh saved walkthroughs.",
+      });
+    }
+  }
+
   async function refreshSavedHistory() {
     if (historyMode === "cloud") {
       setSavedEstimates(await listCloudWalkthroughs(organization.id));
@@ -645,10 +663,40 @@ export function EstimatorApp({
         organizations={organizations}
         saveStatus={saveStatus}
         userEmail={userEmail}
+        onDashboard={() => setStep("dashboard")}
         onChangeOrganization={onChangeOrganization}
         onSignOut={onSignOut}
         onStart={startWalkthrough}
         onUpdateFacility={updateFacility}
+      />
+    );
+  }
+
+  if (step === "dashboard") {
+    return (
+      <SavedWalkthroughDashboard
+        historyMode={historyMode}
+        organization={organization}
+        organizations={organizations}
+        savedEstimates={savedEstimates}
+        status={historyStatus}
+        userEmail={userEmail}
+        onChangeOrganization={onChangeOrganization}
+        onDelete={deleteWalkthroughSnapshot}
+        onExportPdf={(estimate) => {
+          if (historyMode === "cloud") {
+            downloadCloudWalkthroughPdf(estimate.id).catch(() =>
+              runExport(() => exportPdfEstimate(estimate), "Saved PDF export"),
+            );
+            return;
+          }
+
+          runExport(() => exportPdfEstimate(estimate), "Saved PDF export");
+        }}
+        onNewEstimate={startNewEstimate}
+        onOpen={reopenSavedWalkthrough}
+        onRefresh={refreshDashboard}
+        onSignOut={onSignOut}
       />
     );
   }
@@ -663,6 +711,7 @@ export function EstimatorApp({
         saveStatus={saveStatus}
         userEmail={userEmail}
         onBack={() => setStep("facility")}
+        onDashboard={() => setStep("dashboard")}
         onNewEstimate={startNewEstimate}
         onSignOut={onSignOut}
       />
@@ -784,12 +833,343 @@ export function EstimatorApp({
   );
 }
 
+function getEstimateDashboardMetrics(estimate: EstimateDraft) {
+  const cleaningFrequency = normalizeCleaningFrequency(estimate.cleaningFrequency);
+  const totals = getTotals(estimate.entries);
+  const staffing = getStaffingTotals(estimate.entries, cleaningFrequency);
+  const cost = getCostSummary(staffing, estimate.pricing);
+  const buildings = normalizeBuildings(
+    estimate.buildings,
+    estimate.facility.numberOfFloors,
+  );
+
+  return { buildings, cleaningFrequency, cost, staffing, totals };
+}
+
+function SavedWalkthroughDashboard({
+  historyMode,
+  organization,
+  organizations,
+  savedEstimates,
+  status,
+  userEmail,
+  onChangeOrganization,
+  onDelete,
+  onExportPdf,
+  onNewEstimate,
+  onOpen,
+  onRefresh,
+  onSignOut,
+}: {
+  historyMode: HistoryMode;
+  organization: OrganizationSummary;
+  organizations: OrganizationSummary[];
+  savedEstimates: EstimateDraft[];
+  status: {
+    tone: "success" | "error";
+    message: string;
+  } | null;
+  userEmail: string;
+  onChangeOrganization: (organizationId: string) => void;
+  onDelete: (id: string) => void;
+  onExportPdf: (estimate: EstimateDraft) => void;
+  onNewEstimate: () => void;
+  onOpen: (estimate: EstimateDraft) => void;
+  onRefresh: () => void;
+  onSignOut: () => void;
+}) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const filteredEstimates = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return savedEstimates;
+    }
+
+    return savedEstimates.filter((estimate) => {
+      const buildings = normalizeBuildings(
+        estimate.buildings,
+        estimate.facility.numberOfFloors,
+      );
+      const searchable = [
+        estimate.facility.facilityName,
+        estimate.facility.clientName,
+        estimate.facility.address,
+        estimate.facility.facilityType,
+        ...buildings.map((building) => building.name),
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return searchable.includes(query);
+    });
+  }, [savedEstimates, searchQuery]);
+  const dashboardTotals = useMemo(
+    () =>
+      savedEstimates.reduce(
+        (summary, estimate) => {
+          const metrics = getEstimateDashboardMetrics(estimate);
+
+          return {
+            annualRevenue:
+              summary.annualRevenue + metrics.cost.recommendedAnnualContract,
+            monthlyRevenue:
+              summary.monthlyRevenue + metrics.cost.recommendedMonthlyContract,
+            rooms: summary.rooms + metrics.totals.totalRooms,
+            walkthroughs: summary.walkthroughs + 1,
+          };
+        },
+        {
+          annualRevenue: 0,
+          monthlyRevenue: 0,
+          rooms: 0,
+          walkthroughs: 0,
+        },
+      ),
+    [savedEstimates],
+  );
+
+  return (
+    <main className="min-h-dvh bg-[#07110f] px-3 py-4 text-foreground sm:px-5 lg:px-6">
+      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4">
+        <header className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-[#101816] p-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-md border border-[#2f403a] bg-[#0b1311] text-primary">
+              <ClipboardList className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-semibold leading-7 text-foreground">
+                Saved Walkthrough Dashboard
+              </h1>
+              <p className="truncate text-sm text-muted-foreground">
+                {organization.name} - {userEmail}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <OrganizationControl
+              organization={organization}
+              organizations={organizations}
+              onChangeOrganization={onChangeOrganization}
+            />
+            <Button variant="secondary" onClick={onRefresh}>
+              <RefreshCw className="size-4" />
+              Refresh
+            </Button>
+            <Button onClick={onNewEstimate}>
+              <Plus className="size-4" />
+              New Walkthrough
+            </Button>
+            <Button
+              variant="secondary"
+              size="icon"
+              onClick={onSignOut}
+              aria-label="Sign out"
+            >
+              <LogOut className="size-5" />
+            </Button>
+          </div>
+        </header>
+
+        <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <MetricTile
+            icon={Archive}
+            label="Saved Walkthroughs"
+            value={formatNumber(dashboardTotals.walkthroughs, 0)}
+            tone="green"
+          />
+          <MetricTile
+            icon={ClipboardList}
+            label="Total Rooms"
+            value={formatNumber(dashboardTotals.rooms, 0)}
+            tone="sky"
+          />
+          <MetricTile
+            icon={DollarSign}
+            label="Monthly Revenue"
+            value={formatCurrency(dashboardTotals.monthlyRevenue)}
+            tone="green"
+          />
+          <MetricTile
+            icon={DollarSign}
+            label="Annual Revenue"
+            value={formatCurrency(dashboardTotals.annualRevenue)}
+            tone="amber"
+          />
+        </section>
+
+        <Card className="bg-[#101816]">
+          <CardContent className="grid gap-3 pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="pl-10"
+                  placeholder="Search facility, client, address, type, or building"
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                />
+              </div>
+              <Badge
+                className={cn(
+                  "border-[#31453d] bg-[#0b1311]",
+                  historyMode === "cloud" ? "text-primary" : "text-[#fbbf24]",
+                )}
+              >
+                {historyMode === "cloud" ? "Cloud Storage" : "Local Fallback"}
+              </Badge>
+            </div>
+
+            {status ? (
+              <div
+                className={cn(
+                  "rounded-md border px-3 py-2 text-sm font-medium",
+                  status.tone === "success"
+                    ? "border-primary/50 bg-primary/10 text-[#c7f8d9]"
+                    : "border-destructive/60 bg-destructive/10 text-[#ffd0d0]",
+                )}
+              >
+                {status.message}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
+
+        {filteredEstimates.length === 0 ? (
+          <section className="flex min-h-72 flex-col items-center justify-center rounded-lg border border-dashed border-[#344840] bg-[#101816] p-6 text-center">
+            <Archive className="size-10 text-muted-foreground" />
+            <h2 className="mt-4 text-xl font-semibold text-foreground">
+              No saved walkthroughs found
+            </h2>
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+              Start a new walkthrough, add rooms, then use Save Walkthrough to
+              add it to this dashboard.
+            </p>
+            <Button className="mt-4" onClick={onNewEstimate}>
+              <Plus className="size-4" />
+              New Walkthrough
+            </Button>
+          </section>
+        ) : (
+          <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
+            {filteredEstimates.map((estimate) => {
+              const metrics = getEstimateDashboardMetrics(estimate);
+              const savedAt = estimate.savedAt ?? estimate.updatedAt;
+
+              return (
+                <Card key={estimate.id} className="bg-[#101816]">
+                  <CardHeader>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <CardTitle className="truncate">
+                          {facilityLabel(estimate.facility)}
+                        </CardTitle>
+                        <p className="mt-1 truncate text-sm text-muted-foreground">
+                          {estimate.facility.clientName || "No client"} -{" "}
+                          {estimate.facility.facilityType}
+                        </p>
+                      </div>
+                      <Badge className="shrink-0 border-[#31453d] bg-[#0b1311]">
+                        {metrics.buildings.length} buildings
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="grid gap-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <SummaryLine
+                        label="Rooms"
+                        value={formatNumber(metrics.totals.totalRooms, 0)}
+                      />
+                      <SummaryLine
+                        label="Hours"
+                        value={formatNumber(metrics.totals.totalHours)}
+                      />
+                      <SummaryLine
+                        label="Monthly Price"
+                        value={formatCurrency(
+                          metrics.cost.recommendedMonthlyContract,
+                        )}
+                        emphasis
+                      />
+                      <SummaryLine
+                        label="Annual Price"
+                        value={formatCurrency(
+                          metrics.cost.recommendedAnnualContract,
+                        )}
+                      />
+                    </div>
+
+                    <div className="grid gap-2 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Address</span>
+                        <span className="truncate text-right font-medium">
+                          {estimate.facility.address || "Not specified"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Saved</span>
+                        <span className="text-right font-medium">
+                          {savedAt ? new Date(savedAt).toLocaleDateString() : "Saved"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Frequency</span>
+                        <span className="text-right font-medium">
+                          {metrics.cleaningFrequency}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      {metrics.buildings.slice(0, 4).map((building) => (
+                        <Badge
+                          key={building.id}
+                          className="border-[#31453d] bg-[#0b1311] text-[#cfe5d8]"
+                        >
+                          {building.name}
+                        </Badge>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      <Button variant="secondary" onClick={() => onOpen(estimate)}>
+                        <RotateCcw className="size-4" />
+                        Open
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => onExportPdf(estimate)}
+                      >
+                        <FileText className="size-4" />
+                        PDF
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        onClick={() => onDelete(estimate.id)}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </section>
+        )}
+      </div>
+    </main>
+  );
+}
+
 function FacilityScreen({
   facility,
   organization,
   organizations,
   saveStatus,
   userEmail,
+  onDashboard,
   onChangeOrganization,
   onSignOut,
   onStart,
@@ -800,6 +1180,7 @@ function FacilityScreen({
   organizations: OrganizationSummary[];
   saveStatus: "loading" | "saving" | "saved";
   userEmail: string;
+  onDashboard: () => void;
   onChangeOrganization: (organizationId: string) => void;
   onSignOut: () => void;
   onStart: () => void;
@@ -816,6 +1197,7 @@ function FacilityScreen({
           organizations={organizations}
           saveStatus={saveStatus}
           userEmail={userEmail}
+          onDashboard={onDashboard}
           onChangeOrganization={onChangeOrganization}
           onSignOut={onSignOut}
         />
@@ -961,6 +1343,7 @@ function AppHeader({
   organizations,
   saveStatus,
   userEmail,
+  onDashboard,
   onChangeOrganization,
   onSignOut,
 }: {
@@ -968,6 +1351,7 @@ function AppHeader({
   organizations: OrganizationSummary[];
   saveStatus: "loading" | "saving" | "saved";
   userEmail: string;
+  onDashboard: () => void;
   onChangeOrganization: (organizationId: string) => void;
   onSignOut: () => void;
 }) {
@@ -988,6 +1372,10 @@ function AppHeader({
           organizations={organizations}
           onChangeOrganization={onChangeOrganization}
         />
+        <Button variant="secondary" onClick={onDashboard}>
+          <Archive className="size-4" />
+          Dashboard
+        </Button>
         <Badge className="gap-2 border-[#31453d] bg-[#101816] text-[#cfe5d8]">
           <Save className="size-4 text-primary" />
           {saveStatus === "loading"
@@ -1065,6 +1453,7 @@ function RunningTotalsBar({
   saveStatus,
   userEmail,
   onBack,
+  onDashboard,
   onNewEstimate,
   onSignOut,
 }: {
@@ -1075,6 +1464,7 @@ function RunningTotalsBar({
   saveStatus: "loading" | "saving" | "saved";
   userEmail: string;
   onBack: () => void;
+  onDashboard: () => void;
   onNewEstimate: () => void;
   onSignOut: () => void;
 }) {
@@ -1106,6 +1496,10 @@ function RunningTotalsBar({
             <Badge className="hidden border-[#31453d] bg-[#101816] text-[#cfe5d8] sm:inline-flex">
               {userEmail}
             </Badge>
+            <Button variant="secondary" onClick={onDashboard}>
+              <Archive className="size-4" />
+              Dashboard
+            </Button>
             <Button variant="outline" onClick={onNewEstimate}>
               <X className="size-4" />
               New Estimate
